@@ -1481,6 +1481,9 @@ public abstract class Context {
             case COMPANION_DEVICE_SERVICE:
                 result = new android.companion.CompanionDeviceManager(this);
                 break;
+            case VIRTUAL_DEVICE_SERVICE:
+                result = new android.companion.virtual.VirtualDeviceManager(this);
+                break;
             case LAUNCHER_APPS_SERVICE:
                 result = new android.content.pm.LauncherApps(this);
                 break;
@@ -1746,6 +1749,8 @@ public abstract class Context {
                 return WIFI_P2P_SERVICE;
             case "android.companion.CompanionDeviceManager":
                 return COMPANION_DEVICE_SERVICE;
+            case "android.companion.virtual.VirtualDeviceManager":
+                return VIRTUAL_DEVICE_SERVICE;
             case "android.content.pm.LauncherApps":
                 return LAUNCHER_APPS_SERVICE;
             case "android.app.role.RoleManager":

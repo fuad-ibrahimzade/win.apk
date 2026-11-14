@@ -1245,6 +1245,10 @@ every such change is listed here:
   `isGooglePlayServicesAvailable(int, Context)`, the form R8 leaves when it
   reorders the parameters across an app's copy of play-services-basement
   (eBay).
+- `runtime/java/android/companion/virtual/VirtualDeviceManager.java`,
+  `VirtualDevice.java` (new), `Context.java`: the API 34 service exists and
+  has no virtual devices. Google Translate reaches it on its main thread at
+  start, behind `SDK_INT >= 34`, and ended on `NoClassDefFoundError`.
 - `runtime/java/android/graphics/Path.java` (`addRoundRect` with eight
   radii): the radii are scaled to fit their sides by one factor, as Skia's
   `SkRRect::setRectRadii` does, and each corner is a quarter ellipse (one
