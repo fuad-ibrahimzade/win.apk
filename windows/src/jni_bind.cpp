@@ -139,6 +139,16 @@ WINAPK_GUEST_ABI jint guest_register_natives(JNIEnv* env, jclass clazz, const JN
     JNIEnv* host = host_env_of(env);
     if (!host) host = env;
     if (count < 0 || (count > 0 && !methods)) return JNI_ERR;
+    // A null class is what a failed FindClass left: ART ends the app with a JNI error that names
+    // the call; HotSpot reads through the null. Throw, so that the load fails with a stack trace.
+    if (!clazz) {
+        if (!host->ExceptionCheck()) {
+            if (jclass err = host->FindClass("java/lang/NoClassDefFoundError")) {
+                host->ThrowNew(err, "RegisterNatives: the class is null (a FindClass before it found nothing)");
+            }
+        }
+        return JNI_ERR;
+    }
     std::vector<JNINativeMethod> wrapped(methods, methods + count);
     for (JNINativeMethod& m : wrapped) {
         const bool critical = g_critical_query && primitive_only(m.signature) &&

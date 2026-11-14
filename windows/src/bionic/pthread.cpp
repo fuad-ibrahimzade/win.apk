@@ -350,8 +350,25 @@ using GuestDtor = void(WINAPK_GUEST_ABI*)(void*);
 std::mutex g_keys_lock;
 bool g_key_used[kKeysMax];
 GuestDtor g_key_dtor[kKeysMax];
+// A key's slot is used again once the key is deleted, and a thread that set a value under the old
+// key must read null under the new one (POSIX: "the value NULL shall be associated with the new
+// key in all active threads"). As in Bionic, each creation numbers the slot and a thread's value
+// counts only under the number it was set with. Without it LMDB, which keeps its reader slot in
+// a key, found the slot of an environment it had closed when it opened the next: ObjectBox's
+// "another read transaction is still active on this thread" (MDB_BAD_RSLOT), at CallApp's start.
+std::atomic<uint32_t> g_key_seq[kKeysMax];
 
-thread_local void* t_values[kKeysMax];
+struct KeyValue {
+    void* value;
+    uint32_t seq;
+};
+thread_local KeyValue t_values[kKeysMax];
+// The calling thread's value for slot `i`: null when it was set under an earlier key of the slot.
+void* key_value(int i) {
+    KeyValue& v = t_values[i];
+    if (v.value && v.seq != g_key_seq[i].load(std::memory_order_acquire)) v.value = nullptr;
+    return v.value;
+}
 
 WINAPK_GUEST_ABI int g_key_create(int32_t* key, GuestDtor dtor) {
     std::lock_guard<std::mutex> hold(g_keys_lock);
@@ -359,6 +376,7 @@ WINAPK_GUEST_ABI int g_key_create(int32_t* key, GuestDtor dtor) {
         if (!g_key_used[i]) {
             g_key_used[i] = true;
             g_key_dtor[i] = dtor;
+            g_key_seq[i].fetch_add(1, std::memory_order_release);
             *key = i;
             return 0;
         }
@@ -373,11 +391,11 @@ WINAPK_GUEST_ABI int g_key_delete(int32_t key) {
     return 0;
 }
 WINAPK_GUEST_ABI void* g_getspecific(int32_t key) {
-    return key >= 0 && key < kKeysMax ? t_values[key] : nullptr;
+    return key >= 0 && key < kKeysMax ? key_value(key) : nullptr;
 }
 WINAPK_GUEST_ABI int g_setspecific(int32_t key, const void* v) {
     if (key < 0 || key >= kKeysMax) return kEINVAL;
-    t_values[key] = const_cast<void*>(v);
+    t_values[key] = {const_cast<void*>(v), g_key_seq[key].load(std::memory_order_acquire)};
     return 0;
 }
 
@@ -386,14 +404,14 @@ void run_key_destructors() {
     for (int round = 0; round < 4; ++round) {
         bool any = false;
         for (int i = 0; i < kKeysMax; ++i) {
-            void* v = t_values[i];
+            void* v = key_value(i);
             if (!v) continue;
             GuestDtor d;
             {
                 std::lock_guard<std::mutex> hold(g_keys_lock);
                 d = g_key_used[i] ? g_key_dtor[i] : nullptr;
             }
-            t_values[i] = nullptr;
+            t_values[i].value = nullptr;
             if (d) {
                 d(v);
                 any = true;

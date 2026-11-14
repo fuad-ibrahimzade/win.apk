@@ -50,9 +50,28 @@ public final class MacApkNativeLoad {
         }
         ClassLoader app = ActivityHost.macapkAppClassLoader();
         if (app instanceof AppClassLoader) {
-            ((AppClassLoader) app).macapkLoadNative(path);
+            // Win.apk: the library is loaded into the app's loader, but its JNI_OnLoad
+            // must find the classes of the loader that asked: on Android FindClass
+            // there uses the loader of the class that called System.load. A class an
+            // SDK defined in a loader of its own (AWS WAF's, from a DEX it unpacks)
+            // loads its library in its <clinit> and registers its natives by name;
+            // FindClass answered null and RegisterNatives(null) took the JVM down
+            // (Booking's start). requester() is what AppClassLoader falls back to.
+            ClassLoader before = REQUESTER.get();
+            REQUESTER.set(cl);
+            try {
+                ((AppClassLoader) app).macapkLoadNative(path);
+            } finally {
+                if (before == null) REQUESTER.remove(); else REQUESTER.set(before);
+            }
             return;
         }
         System.load(path);
     }
+
+    private static final ThreadLocal<ClassLoader> REQUESTER = new ThreadLocal<>();
+
+    /** The class loader, other than the app's, whose class is loading a native
+     *  library on this thread right now; null outside such a load. */
+    static ClassLoader requester() { return REQUESTER.get(); }
 }

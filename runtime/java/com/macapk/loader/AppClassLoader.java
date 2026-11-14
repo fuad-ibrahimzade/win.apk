@@ -913,6 +913,7 @@ public final class AppClassLoader extends dalvik.system.PathClassLoader {
     public Class<?> loadClass(String name) throws ClassNotFoundException {
         return loadClass(name, false);
     }
+    private static final ThreadLocal<Boolean> ASKING_REQUESTER = new ThreadLocal<>();
 
     /** Prefixes whose classes are loaded CHILD-FIRST (the app's bundled copy
      *  wins over our parent-loaded shadow) when {@link #GMS_CHILD_FIRST} is on.
@@ -1199,7 +1200,24 @@ public final class AppClassLoader extends dalvik.system.PathClassLoader {
             }
         }
 
-        Class<?> c = super.loadClass(normalised, resolve);
+        Class<?> c;
+        try {
+            c = super.loadClass(normalised, resolve);
+        } catch (ClassNotFoundException notHere) {
+            // Win.apk: inside a native load another loader's class asked for, that
+            // loader's classes are found too (MacApkNativeLoad.loadFrom).
+            ClassLoader requester = MacApkNativeLoad.requester();
+            // (That loader's parent is usually this one, which it asks first: once.)
+            if (requester == null || requester == this || ASKING_REQUESTER.get() != null) throw notHere;
+            ASKING_REQUESTER.set(Boolean.TRUE);
+            try {
+                return requester.loadClass(normalised);
+            } catch (ClassNotFoundException | LinkageError alsoNot) {
+                throw notHere;
+            } finally {
+                ASKING_REQUESTER.remove();
+            }
+        }
         if (RETIRE_ENGINE_SHADOWS && c.getClassLoader() != this
                 && !normalised.startsWith("android.") && isRetiredShadow(c)) {
             return appCopyOfRetiredShadow(normalised, c, resolve);

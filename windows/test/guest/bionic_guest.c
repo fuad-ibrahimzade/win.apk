@@ -2104,6 +2104,7 @@ extern const char* const sys_signame[];
 char* strsignal(int);
 int __system_property_foreach(void (*)(const void*, void*), void*);
 int __system_property_read(const void*, char*, char*);
+int pthread_key_delete(int);
 int utimensat(int, const char*, const struct timespec*, int);
 int futimens(int, const struct timespec*);
 int utimes(const char*, const long*);
@@ -2208,6 +2209,20 @@ static void test_popular_imports(const char* dir) {
           path);
     snprintf(path, sizeof path, "%s/tmpdir", dir);
     check("mkdtemp refuses a template without XXXXXX: EINVAL", mkdtemp(path) == 0 && *__errno() == 22, 0);
+
+    // A deleted key's slot is used again: the value set under the old key is not the new key's
+    // (LMDB keeps its reader slot in a key, and found a closed environment's).
+    int k1 = -1, k2 = -1, slots[8], reused = 0;
+    pthread_key_create(&k1, 0);
+    pthread_setspecific(k1, b);
+    pthread_key_delete(k1);
+    for (int i = 0; i < 8; ++i) {
+        pthread_key_create(&slots[i], 0);
+        if (slots[i] == k1) k2 = slots[i], reused = pthread_getspecific(slots[i]) == 0;
+    }
+    check("a key made in a deleted key's slot starts null on a thread that had set the old one",
+          k2 == k1 && reused && pthread_setspecific(k2, path) == 0 && pthread_getspecific(k2) == path, 0);
+    for (int i = 0; i < 8; ++i) pthread_key_delete(slots[i]);
 
     check("ptrace(PTRACE_TRACEME) finds no debugger", ptrace(0, 0, 0, 0) == 0, 0);
     check("fchmodat is accepted", fchmodat(-100, b, 0600, 0) == 0, 0);

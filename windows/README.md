@@ -1236,6 +1236,23 @@ every such change is listed here:
   does. The Play Store adds a language to itself with a session of one
   config split; installed as the whole app, the split replaced the Play
   Store, which was left with no code.
+- `runtime/java/android/graphics/Path.java` (`addRoundRect` with eight
+  radii): the radii are scaled to fit their sides by one factor, as Skia's
+  `SkRRect::setRectRadii` does, and each corner is a quarter ellipse (one
+  cubic; it was a quadratic). A corner radius far past the shape's size is
+  how a drawable asks for a pill (`android:radius="1000dp"`), and Compose
+  hands every rounded shape over this way: unscaled, each corner's curve ran
+  past the opposite one, so the outline of Any.do's sign-in buttons was two
+  crossing arcs between two straight ends.
+- `runtime/java/com/macapk/loader/MacApkNativeLoad.java`,
+  `AppClassLoader.java`: while a class of another class loader loads a
+  native library, the app's loader also finds that loader's classes, as
+  `FindClass` in `JNI_OnLoad` uses the caller's loader on Android. AWS WAF's
+  SDK defines a class in a loader of its own (from a DEX it unpacks) whose
+  `<clinit>` loads the library that registers its natives by name; `FindClass`
+  answered null, and `RegisterNatives(null)` took the JVM down at Booking's
+  start (`windows/src/jni_bind.cpp` now throws `NoClassDefFoundError` for a
+  null class instead of passing it on).
 - Framework members the most installed apps name and the tree did not have
   (`windows/test/apicheck/ApiCheck.java` over 86 apps from APKPure), each a
   `NoSuchMethodError`, `NoSuchFieldError` or `NoClassDefFoundError` where it
