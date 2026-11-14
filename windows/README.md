@@ -133,8 +133,10 @@ and `-DWINAPK_JNI_INCLUDE=<windows-jdk>/include`. The scripts under
 
 Under Wine the paths, user-folders, translation-cache and GL tests fail where Wine differs from
 Windows (names with `|` or `:`, junctions, hard links between racing processes, no D3D11 for
-ANGLE), and an app that asks `ConnectivityManager` for the network ends in the JDK's
-`NetworkInterface` (below); the tests that link libstdc++ dynamically need
+ANGLE, so Flutter apps and GL games end at their first surface), and an app that asks
+`ConnectivityManager` for the network ends in the JDK's
+`NetworkInterface` unless `windows/test/wine_iphlpapi.sh` has given the prefix the function Wine 9
+lacks (`run_app_wine.sh` runs it; before a sweep run it once); the tests that link libstdc++ dynamically need
 `WINEPATH=/usr/lib/gcc/x86_64-w64-mingw32/<version>-posix`. `stage_runtime.sh` on Linux stages
 no `clang/` (there is no Windows clang to copy), so arm64 libraries run on the JIT there.
 
