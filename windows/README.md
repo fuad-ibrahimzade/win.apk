@@ -1236,6 +1236,15 @@ every such change is listed here:
   does. The Play Store adds a language to itself with a session of one
   config split; installed as the whole app, the split replaced the Play
   Store, which was left with no code.
+- `runtime/java/android/content/Context.java`: `startActivity(Intent,
+  Bundle)` launches by itself. It called `startActivity(Intent)` on the same
+  object, and Chrome's context wrapper overrides the two the other way round:
+  a `StackOverflowError` at its start. `android/view/Display.java`:
+  `getDeviceProductInfo()` (null), which Chrome's first activity needs to
+  attach. `com/google/android/gms/common/GooglePlayServicesUtilLight.java`:
+  `isGooglePlayServicesAvailable(int, Context)`, the form R8 leaves when it
+  reorders the parameters across an app's copy of play-services-basement
+  (eBay).
 - `runtime/java/android/graphics/Path.java` (`addRoundRect` with eight
   radii): the radii are scaled to fit their sides by one factor, as Skia's
   `SkRRect::setRectRadii` does, and each corner is a quarter ellipse (one

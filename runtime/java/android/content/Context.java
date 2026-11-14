@@ -1973,7 +1973,15 @@ public abstract class Context {
     // subclass that only overrides startActivity(Intent) (Activity does, via
     // ActivityHost.start) still performs the launch. The Bundle (launch
     // animation hints) is ignored -- Mac.apk has no activity transitions.
-    public void startActivity(Intent intent, android.os.Bundle options) { startActivity(intent); }
+    // Win.apk: it launches by itself. It called startActivity(intent) on this object, and a
+    // wrapper that overrides the two the other way round (Chrome's: its one-argument form goes
+    // through super to here, its two-argument form calls its one-argument form) went round
+    // until the stack ran out, at Chrome's start. AOSP's two forms never call each other on
+    // the same object: each ContextWrapper method hands its own call to the base context.
+    // Activity overrides both and launches from each.
+    public void startActivity(Intent intent, android.os.Bundle options) {
+        com.macapk.loader.ActivityHost.start(intent);
+    }
     // AOSP startActivities(Intent[]) launches a back-STACK: intents[0] is the
     // ROOT of the task and each later intent is pushed on top of it, so the
     // LAST one ends up visible/resumed and every earlier one sits underneath.
