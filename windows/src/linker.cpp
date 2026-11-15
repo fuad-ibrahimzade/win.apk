@@ -216,7 +216,7 @@ GuestLibrary* GuestLinker::open(const std::string& requested, int flags, std::st
     std::vector<std::unique_ptr<GuestLibrary>> fresh;
     auto map_one = [&](const std::string& want, const GuestLibrary* needed_by) -> GuestLibrary* {
         const std::filesystem::path near = needed_by ? needed_by->path.parent_path() : std::filesystem::path();
-        const std::filesystem::path path = locate(want, near);
+        std::filesystem::path path = locate(want, near);
         if (path.empty()) {
             *error = "library \"" + want + "\" not found";
             if (needed_by) *error += ": needed by " + needed_by->file;
@@ -236,6 +236,23 @@ GuestLibrary* GuestLinker::open(const std::string& requested, int flags, std::st
         if (!img) {
             *error = "cannot load \"" + path.u8string() + "\": " + why;
             return nullptr;
+        }
+        // A dependency of the other ABI found first (a search path, the app's
+        // x86_64 directory) while one of the right ABI is next to the library
+        // that needs it (an arm64 library an x86_64 app lacks, installed with
+        // its arm64 dependencies in lib/arm64): that one.
+        if (needed_by && img->machine() != needed_by->image->machine() && !near.empty() && !has_separator(want)) {
+            std::error_code ec;
+            const std::filesystem::path beside = near / utf8_path(want);
+            if (beside != path && std::filesystem::is_regular_file(beside, ec)) {
+                std::string why_beside;
+                if (auto other = ElfImage::map(beside, &why_beside, config_.load)) {
+                    if (other->machine() == needed_by->image->machine()) {
+                        img = std::move(other);
+                        path = beside;
+                    }
+                }
+            }
         }
         // bionic's check: a dependency has to be built for the same ABI.
         if (needed_by && img->machine() != needed_by->image->machine()) {
