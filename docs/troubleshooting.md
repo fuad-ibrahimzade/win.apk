@@ -135,7 +135,11 @@ What makes a report useful:
 - where the APK came from (F-Droid, APKMirror, the app's site) and which
   variant (x86_64, arm64-v8a, a bundle);
 - the exact steps, and what you expected;
-- a screenshot at the moment it goes wrong;
+- a screenshot at the moment it goes wrong; for text or pictures that look
+  blurry or broken, press **Ctrl+Shift+F12** in the app's window instead: it
+  saves the app's own picture and the window as shown, side by side, in the
+  logs folder (`snapshot-...-frame.png`, `snapshot-...-window.png`), and writes
+  the numbers between the two into the log;
 - **the whole log**, not a part of it.
 
 You can write in English or in Hebrew. Security problems go to

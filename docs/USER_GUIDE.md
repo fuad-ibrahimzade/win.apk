@@ -189,6 +189,7 @@ In an app:
 | Keyboard | Key presses, and the characters your keyboard layout types, into text fields: dead keys (an accent, then the letter), AltGr, Caps Lock |
 | An input method (Chinese, Japanese, Korean, the emoji panel) | Text. The text being composed shows in the field itself when the field supports it (most do), otherwise in a small window of Windows' until it is final |
 | **Escape**, **Alt+Left**, the mouse's back button | Android's Back |
+| **Ctrl+Shift+F12** | A snapshot of the display for a problem report: the app's picture as it drew it and the window as you see it, in the logs folder (`snapshot-<app>-<time>-frame.png` and `-window.png`), with a line in the app's log giving its density and the scale it is shown at. A short sound says it is saved |
 | Close the window | The app quits as an Android app leaves the screen: the window goes at once, the app is paused, stopped and destroyed (so it saves what it saves on a phone), and then it ends. An app that does not answer is ended after two seconds |
 | Minimize the window | The app goes to the background (paused and stopped), and comes back when you restore the window |
 | Resize or snap the window | A display of the new size; the app lays itself out again |

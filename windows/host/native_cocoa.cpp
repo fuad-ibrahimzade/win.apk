@@ -1682,6 +1682,13 @@ void set_app_dir(const std::wstring& dir) {
         std::lock_guard<std::mutex> hold(g_app_dir_lock);
         g_app_dir = dir;
     }
+    {
+        // <data>\apps\<name> -> <data>\logs, where the display snapshots go.
+        const size_t name = dir.find_last_of(L"\\/");
+        const size_t apps = name == std::wstring::npos || name == 0 ? std::wstring::npos
+                                                                     : dir.find_last_of(L"\\/", name - 1);
+        if (apps != std::wstring::npos) window_set_snapshot_dir(dir.substr(0, apps) + L"\\logs", dir.substr(name + 1));
+    }
     std::lock_guard<std::mutex> hold(g_icon_lock);
     g_icon_path = dir + L"\\icon.png";
 }

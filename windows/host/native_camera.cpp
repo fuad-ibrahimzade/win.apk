@@ -1137,9 +1137,9 @@ void capture_layout(CaptureUi& ui) {
         // Right to left in Hebrew: the default action stays at the reading start.
         const size_t k = rtl ? ids.size() - 1 - i : i;
         const DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | (k == 0 ? BS_DEFPUSHBUTTON : BS_PUSHBUTTON);
-        HWND b = CreateWindowExW(rtl ? WS_EX_RTLREADING : 0, L"BUTTON", label(ids[k]), style, x, y, widths[k], h, ui.hwnd,
-                                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(ids[k])), GetModuleHandleW(nullptr),
-                                 nullptr);
+        HWND b = CreateWindowExW(rtl ? WS_EX_RTLREADING : 0, L"BUTTON", label(ids[k]), style, x, y, widths[k], h,
+                                 ui.hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ids[k])),
+                                 GetModuleHandleW(nullptr), nullptr);
         SendMessageW(b, WM_SETFONT, reinterpret_cast<WPARAM>(ui.font), TRUE);
         if (ids[k] == kBtnTake) EnableWindow(b, ui.state == CaptureUi::State::kLive && !ui.live.empty());
         ui.buttons[ids[k]] = b;
