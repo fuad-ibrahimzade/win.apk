@@ -2041,7 +2041,11 @@ public final class ActivityHost {
      *  changed the display since; else re-resolved with its own record). A
      *  translucent top that finished moved nothing. */
     private static void windowPolicyOnRevealed() {
-        if (!WINDOW_ACTIVITY_ON || !windowPolicyAosp()) return;
+        if (!WINDOW_ACTIVITY_ON) return;
+        if (!windowPolicyAosp()) {
+            windowOrientationOnRevealed();
+            return;
+        }
         final Activity owner = boxOwner();
         if (owner == null || owner == sWindowBoxOwner.get()) return;
         sWindowBoxOwner = new java.lang.ref.WeakReference<>(owner);
@@ -2055,6 +2059,55 @@ public final class ActivityHost {
             NativeLog.w(TAG, "window: reveal of " + owner.getClass().getName() + ": " + t);
         }
         if (box != null && box.length >= 2) DisplayConfig.macapkCommitPolicyBox(box[0], box[1]);
+    }
+
+    /** Win.apk, without the AOSP window policy: performLaunch turns the phone
+     *  for an activity's fixed orientation, and nothing turned it back when
+     *  that activity finished. Mercantile's cheque scanner (landscape) left
+     *  its portrait app landscape, and a window restored from maximized
+     *  then showed the app as a 240 dp landscape strip, the lock letterboxing
+     *  it. On a device the display follows the activity it reveals
+     *  (DisplayContent.updateOrientation picks the top opaque activity's
+     *  requested orientation): a fixed side is applied again, and a free one
+     *  returns to the user rotation when the activity that finished had
+     *  fixed the side. The record holds the manifest's value, or the
+     *  activity's own setRequestedOrientation. */
+    private static void windowOrientationOnRevealed() {
+        final Activity owner = boxOwner();
+        final Activity was = sWindowBoxOwner.get();
+        if (owner == null || owner == was) return;
+        sWindowBoxOwner = new java.lang.ref.WeakReference<>(owner);
+        final int o = owner.macapkRecordOrientation();
+        try {
+            if (fixedSide(o)) {
+                NativeLog.i(TAG, "window: " + owner.getClass().getName() + " revealed, orientation " + o);
+                NativeCocoa.applyWindowOrientation(o);
+            } else if (was != null && fixedSide(was.macapkRecordOrientation())) {
+                NativeLog.i(TAG, "window: " + owner.getClass().getName()
+                    + " revealed, free: back to the user rotation");
+                NativeCocoa.restoreUserOrientation();
+            }
+        } catch (Throwable t) {
+            NativeLog.w(TAG, "window: orientation of revealed " + owner.getClass().getName() + ": " + t);
+        }
+    }
+
+    /** The landscape and portrait families, the values that fix a side
+     *  (native_cocoa.cpp apply_screen_orientation). */
+    private static boolean fixedSide(int o) {
+        switch (o) {
+            case android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE:
+            case android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE:
+            case android.content.pm.ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE:
+            case android.content.pm.ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE:
+            case android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT:
+            case android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT:
+            case android.content.pm.ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT:
+            case android.content.pm.ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT:
+                return true;
+            default:
+                return false;
+        }
     }
 
     /** Activity.setRequestedOrientation under the policy (R4, R6): recorded on

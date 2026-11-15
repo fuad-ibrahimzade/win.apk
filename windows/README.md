@@ -985,7 +985,12 @@ every such change is listed here:
   manifest's `screenOrientation` at launch (`NativeCocoa.applyWindowOrientation`,
   the same native the policy's branch uses), so a portrait-only app opens
   portrait although the library opens apps landscape. A host without the
-  native keeps the old behaviour.
+  native keeps the old behaviour. When that activity finishes, the one it
+  reveals turns the phone back (`windowOrientationOnRevealed`): its own fixed
+  orientation (the manifest's, or its `setRequestedOrientation`), or, for a
+  free one, the user rotation when the finished activity had fixed a side.
+  Before, a landscape-only activity (Mercantile's cheque scanner) left its
+  portrait app landscape.
 
 - `runtime/java/com/macapk/loader/HostVideo.java` (new): MediaPlayer's video
   player on the host (`windows/host/native_media_video.cpp`): a thread pulls

@@ -321,7 +321,9 @@ The window is the app's display. Dragging an edge, maximizing or snapping
 gives the app a display of the new size, and it lays itself out again, as an
 Android desktop window does. An app that fixed its orientation keeps its
 shape in a window of the other one: it is drawn in the largest box of its
-aspect, centred, with black bars around it.
+aspect, centred, with black bars around it. The orientation belongs to the
+screen on top: when a screen that turned the phone closes (a landscape-only
+cheque scanner in a portrait app), the screen under it gets its own back.
 
 Maximizing is turning the phone: the app's display keeps the phone's short
 side and becomes as long as the screen is wide (360 x 800 dp becomes about
