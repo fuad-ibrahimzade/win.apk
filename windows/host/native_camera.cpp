@@ -999,8 +999,8 @@ const wchar_t* capture_text(int key) {
         L"Switch camera",
         L"Starting the camera…",
         L"No camera was found. You can choose a picture file instead.",
-        L"Camera access is off in Windows settings (Privacy & security > Camera). You can choose a picture file "
-        L"instead.",
+        (L"Camera access is off in Windows settings (Privacy & security > Camera). You can choose a picture file "
+         L"instead."),
         L"The camera could not be started. Another program may be using it.",
         L"The picture could not be saved.",
         L"Pictures",
@@ -1014,19 +1014,19 @@ const wchar_t* capture_text(int key) {
         L"בחר קובץ…",
         L"החלף מצלמה",
         L"מפעיל את המצלמה…",
-        L"לא נמצאה מצלמה. אפשר "
-        L"לבחור קובץ תמונה "
-        L"במקום.",
-        L"הגישה למצלמה כבויה "
-        L"בהגדרות Windows (פרטיות "
-        L"ואבטחה > מצלמה). אפשר "
-        L"לבחור קובץ תמונה "
-        L"במקום.",
-        L"לא ניתן להפעיל את "
-        L"המצלמה. ייתכן שתוכנה "
-        L"אחרת משתמשת בה.",
-        L"לא ניתן לשמור את "
-        L"התמונה.",
+        (L"לא נמצאה מצלמה. אפשר "
+         L"לבחור קובץ תמונה "
+         L"במקום."),
+        (L"הגישה למצלמה כבויה "
+         L"בהגדרות Windows (פרטיות "
+         L"ואבטחה > מצלמה). אפשר "
+         L"לבחור קובץ תמונה "
+         L"במקום."),
+        (L"לא ניתן להפעיל את "
+         L"המצלמה. ייתכן שתוכנה "
+         L"אחרת משתמשת בה."),
+        (L"לא ניתן לשמור את "
+         L"התמונה."),
         L"תמונות",
     };
     return (he ? kHe : kEn)[key];
