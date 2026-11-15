@@ -105,16 +105,19 @@ GuestLinker* GuestLinker::process() { return g_process_linker; }
 
 const ElfImage* GuestLinker::image_of(const GuestLibrary* lib) { return lib ? lib->image.get() : nullptr; }
 
-GuestLibrary* GuestLinker::find_loaded(const std::string& name) const {
+GuestLibrary* GuestLinker::find_loaded(const std::string& name, uint16_t machine) const {
+    const auto fits = [machine](const GuestLibrary& l) {
+        return machine == 0 || (l.image && l.image->machine() == machine);
+    };
     if (has_separator(name)) {
         const std::string want = normalized(guest_path(name));
         for (const auto& l : libs_) {
-            if (normalized(l->path) == want) return l.get();
+            if (normalized(l->path) == want && fits(*l)) return l.get();
         }
         return nullptr;
     }
     for (const auto& l : libs_) {
-        if (l->name == name || file_name_of(l->file) == name) return l.get();
+        if ((l->name == name || file_name_of(l->file) == name) && fits(*l)) return l.get();
     }
     return nullptr;
 }
@@ -263,7 +266,12 @@ GuestLibrary* GuestLinker::open(const std::string& requested, int flags, std::st
             GuestLibrary* d = nullptr;
             if (is_system_library(file_name_of(dep))) {
                 d = system_.get();
-            } else if (!(d = find_loaded(dep)) && !(d = find_fresh(dep))) {
+            } else if (!(d = find_loaded(dep, lib->image->machine())) && !(d = find_fresh(dep))) {
+                // A loaded library of the other ABI with this name is not the
+                // dependency (bionic's check below): an arm64 library an
+                // x86_64 app lacks (AppInstall installs its arm64 set beside
+                // the x86_64 one) takes the arm64 copy next to it, while the
+                // x86_64 one the rest of the app loaded stays as it is.
                 d = map_one(dep, lib);
                 if (!d) return nullptr;
             }

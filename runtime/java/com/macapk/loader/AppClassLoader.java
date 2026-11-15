@@ -3007,8 +3007,25 @@ public final class AppClassLoader extends dalvik.system.PathClassLoader {
         File dir = nativeLibDir();
         if (dir == null) return null;
         File candidate = new File(dir, "lib" + libname + ".so");
-        return candidate.exists() ? candidate : null;
+        if (candidate.exists()) return candidate;
+        // Win.apk: a library only the app's arm64 set has, installed beside
+        // the x86_64 set (InstalledSplits.fallbackLibDirs); the guest linker
+        // gives it the arm64 copies of what it needs.
+        for (File other : InstalledSplits.fallbackLibDirs(apkFile.getPath())) {
+            File f = new File(other, "lib" + libname + ".so");
+            if (f.exists()) {
+                if (sFallbackLogged.add(libname)) {
+                    NativeLog.i(TAG, "findLibrary(" + libname + "): not in " + dir.getName() + "/, only in the "
+                        + other.getName() + " set the installer added -> " + f);
+                }
+                return f;
+            }
+        }
+        return null;
     }
+
+    private static final java.util.Set<String> sFallbackLogged =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /**
      * t3-mmap (2026-07-24): does the arm64-v8a source .so for `libname`
@@ -3135,7 +3152,12 @@ public final class AppClassLoader extends dalvik.system.PathClassLoader {
         }
         if (arm64Dir == null || !arm64Dir.isDirectory()) return true;   // ARM32-only app: self-contained
         File f = new File(arm64Dir, "lib" + libname + ".so");
-        return f.exists();
+        if (f.exists()) return true;
+        // Win.apk: an x86_64 app with lib/arm64 beside its lib/x86_64 (the few
+        // arm64 libraries its x86_64 set lacks): a library of the x86_64 set
+        // depends on no arm64 file.
+        File so = locateApkSo(libname);
+        return so != null && !so.getParentFile().getAbsoluteFile().equals(arm64Dir.getAbsoluteFile());
     }
 
     /** Process-wide count of translate() calls currently holding the

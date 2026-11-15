@@ -165,7 +165,8 @@ public:
     void* resolve_host(const char* name) const;
 
 private:
-    GuestLibrary* find_loaded(const std::string& name) const;
+    // `machine` non-zero: only a library built for that ABI (e_machine).
+    GuestLibrary* find_loaded(const std::string& name, uint16_t machine = 0) const;
     GuestLibrary* library_containing(const void* addr) const;
     std::unordered_set<GuestLibrary*> alive() const;
     void unload_if_unreferenced(GuestLibrary* lib);

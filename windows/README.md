@@ -1513,6 +1513,13 @@ every such change is listed here:
     (`AccessibilityEvent.getTextChangeTypes`, `Network.CREATOR`,
     `OsConstants.PROT_READ`, `Context.bindService(.., BindServiceFlags)`,
     `android.icu.text.IDNA`, `sun.misc.Cleaner` and about fifty more).
+- `runtime/java/com/macapk/loader/InstalledSplits.java`, `AppClassLoader.java`:
+  `fallbackLibDirs` is the install dir's `lib/arm64/` when it is not the
+  native library directory: where `AppInstall` puts the arm64 libraries an
+  x86_64 build lacks, with what they need. `locateApkSo` looks there for a
+  library the native library directory lacks, and `stage6SourceStillPresent`
+  no longer takes a library of the x86_64 set for an arm64 one whose source
+  is gone (which would have translated it again at every start).
 - `runtime/java/com/macapk/loader/CameraCaptureHandler.java` (new),
   `ActivityHost.java`, `MacApkPackageManager.java`: `MediaStore.ACTION_IMAGE_CAPTURE`
   (and `_SECURE`) resolve to the camera app's capture activity

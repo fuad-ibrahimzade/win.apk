@@ -753,8 +753,14 @@ tests the transport and the broker's checks across three processes.
    device layout under `android\data\app\~~<nonce>\<package>-<nonce>\`:
    `base.apk` (a hard link for a plain APK), `split_<name>.apk` chosen as
    upstream chooses them, and the native libraries of the first ABI in
-   `x86_64,arm64-v8a` the app has, under `lib\<isa>\`. A record file notes
-   the result so the step runs once per input file.
+   `x86_64,arm64-v8a` the app has, under `lib\<isa>\`. Libraries a later ABI
+   has and that one lacks (an arm64-only SDK in an x86_64 build) go to
+   `lib\arm64\` with the arm64 libraries they need (`DT_NEEDED`, followed):
+   `findLibrary` looks there for a library `lib\x86_64\` lacks, the guest
+   linker gives an arm64 library the arm64 copies of its dependencies even
+   where an x86_64 library of that name is loaded, and the background
+   translation sees only those. A record file notes the result so the step
+   runs once per input file.
 3. `com.winapk.tools.AppMeta` renders the launcher icon to
    `apps\<name>\icon.png`, and writes the label and `package.txt` (package,
    versionCode, versionName, the first activity's manifest

@@ -26,7 +26,10 @@ In practice:
    build listed for x86_64. The Store in Win.apk does this for you.
 2. **A bundle (`.apkm`, `.xapk`, `.apks`) that includes an x86_64 split is
    fine**: Win.apk installs the x86_64 split and leaves the ARM ones out, as a
-   phone installs only its own.
+   phone installs only its own. One exception, where a phone would fail: a
+   library the ARM split has and the x86_64 one lacks (some SDKs ship ARM
+   only, like Mercantile's cheque scanner) is installed from the ARM split,
+   with the ARM libraries it needs, and runs translated.
 3. **Otherwise take `arm64-v8a`.** It works, and gets faster after its first
    runs.
 4. **Never `armeabi-v7a` alone.** If that is the only build of an app, it will

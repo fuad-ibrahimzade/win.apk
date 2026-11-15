@@ -84,6 +84,15 @@ ARM64=(
 )
 "$CC" "${ARM64[@]}" -O2 -mno-outline-atomics -Wl,-soname,libwinapk_arm64_isa_O2.so \
     -o "$ARM64_OUT/libwinapk_arm64_isa_O2.so" "$HERE/guest/arm64_isa.c"
+# The linker test's x86_64 app with an arm64-only library (guest/mixed_guest.c):
+# the same dependency name in link/ (x86_64) and link/arm64/.
+mkdir -p "$LINK/arm64"
+"$CC" "${COMMON[@]}" -DWINAPK_MIXED_DEP -Wl,-soname,libwinapk_mixed_dep.so \
+    -o "$LINK/libwinapk_mixed_dep.so" "$HERE/guest/mixed_guest.c"
+"$CC" "${ARM64[@]}" -O2 -DWINAPK_MIXED_DEP -Wl,-soname,libwinapk_mixed_dep.so \
+    -o "$LINK/arm64/libwinapk_mixed_dep.so" "$HERE/guest/mixed_guest.c"
+"$CC" "${ARM64[@]}" -O2 -DWINAPK_MIXED_ROOT -Wl,-soname,libwinapk_mixed_root.so -Wl,--no-as-needed \
+    -o "$LINK/arm64/libwinapk_mixed_root.so" "$HERE/guest/mixed_guest.c" -L"$LINK/arm64" -lwinapk_mixed_dep
 "$CC" "${ARM64[@]}" -O3 -mno-outline-atomics -Wl,-soname,libwinapk_arm64_isa_O3.so \
     -o "$ARM64_OUT/libwinapk_arm64_isa_O3.so" "$HERE/guest/arm64_isa.c"
 "$CC" "${ARM64[@]}" -O3 -march=armv8.1-a -Wl,-soname,libwinapk_arm64_isa_lse.so \
