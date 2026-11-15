@@ -356,9 +356,9 @@ What the first pass (89 apps, 2026-11) left open: the NDK's `AMediaCodec`,
 `AMediaFormat` and `AMediaExtractor` (10 apps), `ASensorManager` (10) and
 `AHardwareBuffer` (mostly weak references); wide-character stdio (`swprintf`,
 `getwc`, in every statically linked libc++ but rarely called) and `<fenv.h>`;
-35 oversize methods in 10 apps the splitter cannot cut (PayPal has 25, most of
-them one `synchronized` block or one `try` from end to end; WhatsApp's
-`DeepLinkActivity.onCreate`, X's `Item$$serializer.deserialize`); and, on the
+12 oversize methods in 8 apps the splitter cannot cut (a `synchronized` block from end to
+end: WhatsApp's `DeepLinkActivity.onCreate`; X's `Item$$serializer.deserialize`; two oversize
+`<clinit>`s, one of boxed `Long`s in Instagram, that `ClinitPrecompute` does not model); and, on the
 Java side, `android.app.appsearch`, `android.icu`'s date-interval and list
 formatters, `ActivityGroup` / `TabActivity`, and a real PDF engine behind
 `PdfRenderer`.
@@ -1247,6 +1247,23 @@ every such change is listed here:
   `isGooglePlayServicesAvailable(int, Context)`, the form R8 leaves when it
   reorders the parameters across an app's copy of play-services-basement
   (eBay).
+- `runtime/java/com/macapk/dex/MethodSplitter.java` (`cloneableHandlers`),
+  `Translator.java` (`emitHandlerClones`, `labelFor`): a handler copied into
+  each part may hold a short forward branch to an instruction of its own
+  block, and the copy gets a label (and a frame) there. That is the handler
+  R8 leaves for `catch (Throwable t) { Throwable c = t.getCause(); if (c !=
+  null) throw c; throw t; }`, which a Dagger component's constructor shares
+  between hundreds of two-instruction try ranges: each range then spans to the
+  method's end, no cut is valid, and the constructor became the stub that
+  throws. Netflix's singleton component (341 ranges; `Application.onCreate`
+  threw), 21 of PayPal's 25 stubbed methods and Booking's one now split; the
+  25 PayPal classes pass `-Xverify:all`.
+- `runtime/java/android/widget/TextView.java`: under a movement method the
+  text is held as a `Spannable`, as AOSP's `setText` does (`type == SPANNABLE
+  || mMovement != null`), and `setMovementMethod` converts what is there.
+  Snapchat's sign-in link casts `getText()` in its constructor.
+  `android/icu/util/TimeZone.java`: `getIanaID(String)` (API 34), missing on
+  TripAdvisor's main thread at start.
 - `runtime/java/android/companion/virtual/VirtualDeviceManager.java`,
   `VirtualDevice.java` (new), `Context.java`: the API 34 service exists and
   has no virtual devices. Google Translate reaches it on its main thread at

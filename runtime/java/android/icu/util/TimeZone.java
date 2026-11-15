@@ -80,6 +80,22 @@ public class TimeZone implements java.io.Serializable, Cloneable, java.io.Extern
         if (isSystemID != null && isSystemID.length > 0) isSystemID[0] = true;
         return id;
     }
+    /** ICU 74 getIanaID(String) (API 34): the IANA name of a zone ("Asia/Calcutta" ->
+     *  "Asia/Kolkata"), or UNKNOWN_ZONE_ID for an id that names no zone. java.time's alias
+     *  table gives the current name for the old ones the JDK knows. Win.apk: the method was
+     *  missing, a NoSuchMethodError on TripAdvisor's main thread at start. */
+    public static String getIanaID(String id) {
+        if (id == null || id.isEmpty()) return "Etc/Unknown";
+        try {
+            String zone = java.time.ZoneId.of(id, java.time.ZoneId.SHORT_IDS).getId();
+            for (String known : java.util.TimeZone.getAvailableIDs()) {
+                if (known.equals(zone)) return zone;
+            }
+        } catch (RuntimeException notAZone) {
+            // below
+        }
+        return "Etc/Unknown";
+    }
     public static String getRegion(String id) { return "001"; }
     public static String getIDForWindowsID(String winID, String region) { return winID; }
     public static String getWindowsID(String id) { return id; }
