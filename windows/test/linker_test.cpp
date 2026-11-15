@@ -258,6 +258,7 @@ int main(int argc, char** argv) {
     // arm64 library's dependency is the arm64 copy beside it, although an x86_64 library of that name is
     // loaded, which stays as it is. Nothing here runs arm64 code; mixed_guest.c has no constructors.
     error.clear();
+    winapk::set_android_root(argv[1]);  // the arm64 libraries by Android path: <dir>/arm64/
     void* dep86 = linker.open("libwinapk_mixed_dep.so", winapk::GuestLinker::kRtldNow, &error);
     check("open the x86_64 libwinapk_mixed_dep.so", dep86 != nullptr, error);
     void* mixed = linker.open("/arm64/libwinapk_mixed_root.so", winapk::GuestLinker::kRtldNow, &error);
@@ -271,6 +272,7 @@ int main(int argc, char** argv) {
               linker.open("libwinapk_mixed_dep.so", winapk::GuestLinker::kRtldNoLoad, &error) == dep86);
         linker.close(dep86, &error);  // the kRtldNoLoad reference
     }
+    winapk::set_android_root("");
 
     std::printf("\n%s: %d failure(s)\n", g_failures ? "FAILED" : "OK", g_failures);
     return g_failures;
