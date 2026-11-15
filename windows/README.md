@@ -1513,6 +1513,11 @@ every such change is listed here:
     (`AccessibilityEvent.getTextChangeTypes`, `Network.CREATOR`,
     `OsConstants.PROT_READ`, `Context.bindService(.., BindServiceFlags)`,
     `android.icu.text.IDNA`, `sun.misc.Cleaner` and about fifty more).
+- `runtime/java/android/accounts/AccountManager.java`: a Google account added
+  through Win.apk's sign-in window (the Play Store's Sign in) is announced to
+  the caller's own listeners and receivers before the add's result is posted,
+  as AOSP sends LOGIN_ACCOUNTS_CHANGED first. The broker's broadcast came after
+  it, and the Play Store took the add for a cancel until it was restarted.
 - `runtime/java/com/macapk/loader/InstalledSplits.java`, `AppClassLoader.java`:
   `fallbackLibDirs` is the install dir's `lib/arm64/` when it is not the
   native library directory: where `AppInstall` puts the arm64 libraries an

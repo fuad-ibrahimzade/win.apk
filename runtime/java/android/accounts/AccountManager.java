@@ -764,6 +764,16 @@ public class AccountManager {
         }
     }
 
+    /** The account list changed in the broker: this process's listeners and receivers
+     *  hear it now (each posted to its Handler), ahead of anything posted after. */
+    private void announceAccountsChanged(Context c) {
+        notifyAccountsChanged();
+        if (c == null) return;
+        try {
+            c.sendBroadcast(new Intent(LOGIN_ACCOUNTS_CHANGED_ACTION).setPackage(c.getPackageName()));
+        } catch (Throwable ignored) { }
+    }
+
     /** AOSP AccountManager's LOGIN_ACCOUNTS_CHANGED receiver: every registered listener gets
      *  the CURRENT visible accounts (filtered by the types it registered for) on its Handler,
      *  after the service changed the database (sendAccountsChangedBroadcast follows
@@ -1008,7 +1018,18 @@ public class AccountManager {
             Context c = appContext();
             final String caller = c == null ? null : c.getPackageName();
             final boolean userAsked = activity != null;
-            return submit(() -> sysGoogleAddAccount(caller, userAsked), callback, handler);
+            return submit(() -> {
+                Bundle b = sysGoogleAddAccount(caller, userAsked);
+                // AOSP addAccountInternal sends LOGIN_ACCOUNTS_CHANGED before the
+                // authenticator's response reaches the caller. The broker's broadcast
+                // crosses processes and came after the result: the Play Store compared
+                // its account cache too early ("UAth: No new account added: Assume the
+                // user canceled") and stayed signed out until it was started again. So
+                // this process hears the change first; both are posted to the main
+                // Looper ahead of the result.
+                announceAccountsChanged(c);
+                return b;
+            }, callback, handler);
         }
         if (sys(accountType)) {
             // AOSP AccountManager.addAccount puts the caller's package into the options;
