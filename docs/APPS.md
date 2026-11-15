@@ -46,7 +46,7 @@ keeping a copy.
 
 | Area | | What exactly | What is missing | Source |
 |---|:-:|---|---|---|
-| Camera | ✅ | Webcams through Camera, camera2 and CameraX (Media Foundation); a virtual camera when there is none. Preview, analysis frames and JPEG stills; video through `MediaRecorder` or an encoder's Surface from camera2 | | `native_camera.cpp` |
+| Camera | ✅ | Webcams through Camera, camera2 and CameraX (Media Foundation); a virtual camera when there is none. Preview, analysis frames and JPEG stills; video through `MediaRecorder` or an encoder's Surface from camera2. The system camera's capture screen (`ACTION_IMAGE_CAPTURE`): a window on the webcam with Take photo, or a picture file chosen instead | | `native_camera.cpp`, `CameraCaptureHandler.java` |
 | Location | ✅ | Windows' location service, behind Windows' privacy switch | | `native_location.cpp` |
 | Sensors | ❌ | | The sensors exist but report a phone lying still; tilt controls do nothing | `runtime/java/android/hardware/` |
 | Bluetooth | ⚠️ | Paired devices; serial (RFCOMM) connections both ways; LE scans and the GATT client (read, write, notifications) | Discovery and pairing from the app, LE advertising, the GATT server, audio and HID profiles, L2CAP | `native_bluetooth.cpp` |

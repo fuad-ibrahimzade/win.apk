@@ -405,7 +405,11 @@ is running, as Android does.
 Granting a permission does not create the data behind it: a PC has no
 contacts, SIM, SMS or sensors, so an app that is granted those finds them
 empty. The camera and microphone use the PC's webcam and microphone, behind
-Windows' own privacy switches (Settings > Privacy). Location comes from
+Windows' own privacy switches (Settings > Privacy). An app that asks the
+system camera for a picture (a "take a photo" button) gets Win.apk's camera
+window: the webcam's picture, **Take photo**, then **Use photo** or
+**Retake**; **Choose a file…** sends a picture file instead, for a PC with no
+camera or one that faces you. Location comes from
 Windows' location service; when Windows denies it, Win.apk opens the Windows
 location settings page once per run.
 

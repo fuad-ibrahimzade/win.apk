@@ -2510,6 +2510,12 @@ public final class ActivityHost {
         if (act.kind == HostAction.Kind.DOCUMENT_PICKER) {
             return DocumentPickerHandler.handle(intent, real, hostCover(true));
         }
+        // The camera app's capture activity: full-screen, so the caller is
+        // paused and stopped while the host's camera screen is up; the picture
+        // is the user's own act there.
+        if (act.kind == HostAction.Kind.IMAGE_CAPTURE) {
+            return CameraCaptureHandler.handle(intent, real, hostCover(true));
+        }
         // SHARE_TEXT's payload lives in the EXTRAS, which the predicate is not
         // allowed to read (see hostActionFor). Compose it HERE, where the
         // intent is being performed and is fully populated.
@@ -2664,6 +2670,10 @@ public final class ActivityHost {
              *  panel and answers with HostDocumentsProvider URIs. v1.0.1653,
              *  MACAPK_DOC_PICKER. */
             DOCUMENT_PICKER,
+            /** The camera app's capture activity (MediaStore.ACTION_IMAGE_CAPTURE):
+             *  CameraCaptureHandler shows the host's camera screen and writes the
+             *  picture to EXTRA_OUTPUT. MACAPK_IMAGE_CAPTURE. */
+            IMAGE_CAPTURE,
             /** Real macOS password verification for Android Keyguard's
              * confirm-device-credential activity. */
             DEVICE_CREDENTIAL
@@ -2810,6 +2820,9 @@ public final class ActivityHost {
         }
         if (DocumentPickerHandler.isPickerIntent(intent)) {
             return new HostAction(HostAction.Kind.DOCUMENT_PICKER, null);
+        }
+        if (CameraCaptureHandler.isCaptureIntent(intent)) {
+            return new HostAction(HostAction.Kind.IMAGE_CAPTURE, null);
         }
         return null;
     }
@@ -3049,6 +3062,12 @@ public final class ActivityHost {
             if (MacApkPackageManager.macapkInstallerComponent()
                     && MacApkPackageManager.macapkIsInstallerPackage(pkg)
                     && InstallIntentHandler.isInstallIntent(intent)
+                    && resolveImplicitToHost(intent)) {
+                return null;
+            }
+            // The camera app's capture activity, pinned from the row the PM
+            // lists (CameraCaptureHandler.resolveInfo).
+            if (CameraCaptureHandler.isCameraComponent(cn) && CameraCaptureHandler.isCaptureIntent(intent)
                     && resolveImplicitToHost(intent)) {
                 return null;
             }

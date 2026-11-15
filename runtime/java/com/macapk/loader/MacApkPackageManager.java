@@ -2788,6 +2788,8 @@ public final class MacApkPackageManager extends PackageManager {
                         ? DeviceCredentialHandler.resolveInfo()
                         : act.kind == ActivityHost.HostAction.Kind.DOCUMENT_PICKER
                         ? macapkDocumentsUiResolveInfo(hostQuery)
+                        : act.kind == ActivityHost.HostAction.Kind.IMAGE_CAPTURE
+                        ? CameraCaptureHandler.resolveInfo(hostQuery)
                         : act.kind == ActivityHost.HostAction.Kind.INSTALL_PACKAGE
                                 && macapkInstallerComponent()
                         ? macapkInstallerResolveInfo(hostQuery)

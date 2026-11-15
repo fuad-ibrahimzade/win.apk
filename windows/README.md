@@ -1513,6 +1513,16 @@ every such change is listed here:
     (`AccessibilityEvent.getTextChangeTypes`, `Network.CREATOR`,
     `OsConstants.PROT_READ`, `Context.bindService(.., BindServiceFlags)`,
     `android.icu.text.IDNA`, `sun.misc.Cleaner` and about fifty more).
+- `runtime/java/com/macapk/loader/CameraCaptureHandler.java` (new),
+  `ActivityHost.java`, `MacApkPackageManager.java`: `MediaStore.ACTION_IMAGE_CAPTURE`
+  (and `_SECURE`) resolve to the camera app's capture activity
+  (`com.android.camera2`, listed by `queryIntentActivities`, startable by that
+  component too) and open the host's camera screen (`native_camera.cpp`,
+  `nativeCapture`): the JPEG goes to `EXTRA_OUTPUT` (or the intent's ClipData)
+  through the app's own `ContentResolver`, or a thumbnail comes back in the
+  `data` extra; RESULT_CANCELED when the user cancels. Nothing resolved them
+  before, so "take a photo" buttons were dead. `MACAPK_IMAGE_CAPTURE=0` leaves
+  them unresolved.
 
 ## License
 
