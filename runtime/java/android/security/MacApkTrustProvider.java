@@ -79,20 +79,63 @@ public final class MacApkTrustProvider extends Provider {
             d.checkClientTrusted(c, jdkAuthType(a));
         }
         @Override public void checkServerTrusted(X509Certificate[] c, String a) throws CertificateException {
-            d.checkServerTrusted(c, jdkAuthType(a));
+            try { d.checkServerTrusted(c, jdkAuthType(a)); }
+            catch (CertificateException e) { explain(c, null, null, e); throw e; }
         }
         @Override public void checkClientTrusted(X509Certificate[] c, String a, Socket s) throws CertificateException {
             d.checkClientTrusted(c, jdkAuthType(a), s);
         }
         @Override public void checkServerTrusted(X509Certificate[] c, String a, Socket s) throws CertificateException {
-            d.checkServerTrusted(c, jdkAuthType(a), s);
+            try { d.checkServerTrusted(c, jdkAuthType(a), s); }
+            catch (CertificateException e) {
+                explain(c, s, s instanceof javax.net.ssl.SSLSocket ss ? ss.getHandshakeSession() : null, e);
+                throw e;
+            }
         }
         @Override public void checkClientTrusted(X509Certificate[] c, String a, SSLEngine e) throws CertificateException {
             d.checkClientTrusted(c, jdkAuthType(a), e);
         }
         @Override public void checkServerTrusted(X509Certificate[] c, String a, SSLEngine e) throws CertificateException {
-            d.checkServerTrusted(c, jdkAuthType(a), e);
+            try { d.checkServerTrusted(c, jdkAuthType(a), e); }
+            catch (CertificateException x) { explain(c, e, e == null ? null : e.getHandshakeSession(), x); throw x; }
         }
         @Override public X509Certificate[] getAcceptedIssuers() { return d.getAcceptedIssuers(); }
+
+        /** A server's chain this trust manager refused, once per host and reason: what
+         *  was sent (subject <- issuer), how many anchors this manager holds, the name
+         *  asked for (SNI) and whose TLS stack asked. "PKIX path building failed" alone
+         *  cannot tell a missing root (a filtering proxy's, a store that was not the
+         *  host's) from a server's wrong certificate (no SNI) or a constraint. */
+        private void explain(X509Certificate[] chain, Object via, javax.net.ssl.SSLSession session,
+                             CertificateException e) {
+            try {
+                String host = session == null ? null : session.getPeerHost();
+                StringBuilder sni = new StringBuilder();
+                if (session instanceof javax.net.ssl.ExtendedSSLSession x) {
+                    try {
+                        for (javax.net.ssl.SNIServerName n : x.getRequestedServerNames()) {
+                            if (n instanceof javax.net.ssl.SNIHostName h) sni.append(h.getAsciiName());
+                        }
+                    } catch (Throwable ignored) { }
+                }
+                String key = host + "|" + e.getMessage();
+                if (!sExplained.add(key) || sExplained.size() > 64) return;
+                StringBuilder sent = new StringBuilder();
+                for (int i = 0; chain != null && i < chain.length; i++) {
+                    if (i > 0) sent.append(" ; ");
+                    sent.append(chain[i].getSubjectX500Principal().getName()).append(" <- ")
+                        .append(chain[i].getIssuerX500Principal().getName());
+                }
+                int anchors = -1;
+                try { anchors = d.getAcceptedIssuers().length; } catch (Throwable ignored) { }
+                com.macapk.loader.NativeLog.w("MacApkTrust", "refused " + (host == null ? "(unknown host)" : host)
+                    + " (SNI " + (sni.length() == 0 ? "none" : sni) + ", via "
+                    + (via == null ? "no socket or engine" : via.getClass().getName()) + ", " + anchors
+                    + " anchors): " + e.getMessage() + "; chain sent: " + sent);
+            } catch (Throwable ignored) { }
+        }
     }
+
+    private static final java.util.Set<String> sExplained =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
 }

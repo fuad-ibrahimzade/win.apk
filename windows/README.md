@@ -1513,6 +1513,12 @@ every such change is listed here:
     (`AccessibilityEvent.getTextChangeTypes`, `Network.CREATOR`,
     `OsConstants.PROT_READ`, `Context.bindService(.., BindServiceFlags)`,
     `android.icu.text.IDNA`, `sun.misc.Cleaner` and about fifty more).
+- `runtime/java/android/security/MacApkTrustProvider.java`: a server chain the
+  default trust manager refuses is logged once per host and reason (tag
+  `MacApkTrust`): the chain as sent, the anchors the manager holds, the SNI
+  name and whose TLS stack asked. Play services' check-in failing with "PKIX
+  path building failed" behind it all (android-id 0, the Play Store's server
+  errors) could not be told apart from that message alone.
 - `runtime/java/android/accounts/AccountManager.java`: a Google account added
   through Win.apk's sign-in window (the Play Store's Sign in) is announced to
   the caller's own listeners and receivers before the add's result is posted,
