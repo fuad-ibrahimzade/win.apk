@@ -1006,6 +1006,8 @@ void send_text(const std::wstring& chars) {
     if (!text.empty()) g_input->text(text);
 }
 
+void window_snapshot(HWND hwnd);  // below, with the PNG writer
+
 void on_key_down(HWND hwnd, WPARAM vk, LPARAM lp) {
     // What the key types: the character messages TranslateMessage queued right
     // behind this key-down.
@@ -1288,6 +1290,11 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (msg == WM_SYSKEYDOWN && wp == VK_LEFT) {
                 g_back_chord = true;
                 g_input->key(0, 4, 0, 0, false);
+                return 0;
+            }
+            // Ctrl+Shift+F12: a snapshot of the display for a report (window_snapshot).
+            if (wp == VK_F12 && GetKeyState(VK_CONTROL) < 0 && GetKeyState(VK_SHIFT) < 0) {
+                window_snapshot(hwnd);
                 return 0;
             }
             on_key_down(hwnd, wp, lp);
@@ -1798,6 +1805,140 @@ HICON icon_from_png(const std::wstring& path, int size) {
 }
 
 }  // namespace
+
+// ---- the display snapshot (Ctrl+Shift+F12) -------------------------------------
+//
+// For a report of text or pictures that look wrong: the frame exactly as the
+// app drew it, the window's client area exactly as Windows shows it, and one
+// log line with every number between the two (the app's density, the scale the
+// window shows the phone at, the monitor's DPI, whether the frame was shown
+// pixel for pixel or resampled). Comparing the two pictures says whether the
+// damage is in the app's drawing or in the way the window shows it. Saved as
+// <data>\logs\snapshot-<app>-<time>-frame.png and -window.png.
+
+namespace {
+
+std::mutex g_snapshot_lock;
+std::wstring g_snapshot_dir, g_snapshot_app;
+
+// `px` as a PNG (BGRA rows, top first, `w` pixels apart). WIC; COM must be up.
+bool save_png(const std::wstring& path, const uint32_t* px, int w, int h) {
+    IWICImagingFactory* factory = nullptr;
+    IWICStream* stream = nullptr;
+    IWICBitmapEncoder* encoder = nullptr;
+    IWICBitmapFrameEncode* frame = nullptr;
+    WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
+    bool ok = SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                         IID_PPV_ARGS(&factory))) &&
+              SUCCEEDED(factory->CreateStream(&stream)) &&
+              SUCCEEDED(stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE)) &&
+              SUCCEEDED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) &&
+              SUCCEEDED(encoder->Initialize(stream, WICBitmapEncoderNoCache)) &&
+              SUCCEEDED(encoder->CreateNewFrame(&frame, nullptr)) && SUCCEEDED(frame->Initialize(nullptr)) &&
+              SUCCEEDED(frame->SetSize(static_cast<UINT>(w), static_cast<UINT>(h))) &&
+              SUCCEEDED(frame->SetPixelFormat(&format)) &&
+              SUCCEEDED(frame->WritePixels(static_cast<UINT>(h), static_cast<UINT>(w) * 4,
+                                           static_cast<UINT>(w) * h * 4,
+                                           reinterpret_cast<BYTE*>(const_cast<uint32_t*>(px)))) &&
+              SUCCEEDED(frame->Commit()) && SUCCEEDED(encoder->Commit());
+    if (frame) frame->Release();
+    if (encoder) encoder->Release();
+    if (stream) stream->Release();
+    if (factory) factory->Release();
+    return ok;
+}
+
+std::string narrow(const std::wstring& w) {
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (n <= 1) return {};
+    std::string s(static_cast<size_t>(n - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, &s[0], n, nullptr, nullptr);
+    return s;
+}
+
+void window_snapshot(HWND hwnd) {
+    std::wstring dir, app;
+    {
+        std::lock_guard<std::mutex> hold(g_snapshot_lock);
+        dir = g_snapshot_dir;
+        app = g_snapshot_app;
+    }
+    if (dir.empty()) return;
+    CreateDirectoryW(dir.c_str(), nullptr);
+    SYSTEMTIME t;
+    GetLocalTime(&t);
+    wchar_t stamp[32];
+    swprintf(stamp, 32, L"%04u%02u%02u-%02u%02u%02u", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+    const std::wstring base = dir + L"\\snapshot-" + app + L"-" + stamp;
+
+    // The frame as the app drew it (with the overlay the window draws over it).
+    std::vector<uint32_t> frame;
+    int fw = 0, fh = 0;
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    const RECT box = app_rect(client);
+    const int bw = box.right - box.left, bh = box.bottom - box.top;
+    FramePresent how = FramePresent::kStale;
+    {
+        std::lock_guard<std::mutex> hold(g_frame_lock);
+        if (g_frame_w > 0 && g_frame_h > 0) {
+            const uint32_t* px = composed_frame();
+            frame.assign(px, px + static_cast<size_t>(g_frame_w) * g_frame_h);
+            fw = g_frame_w;
+            fh = g_frame_h;
+            how = window_frame_present(fw, fh, bw, bh, g_surface.cx, g_surface.cy);
+        }
+    }
+    for (uint32_t& p : frame) p |= 0xFF000000u;  // the app's frames are opaque; keep the PNG so
+    // The client area as it is on screen (DWM's redirection surface of it).
+    const int cw = client.right, ch = client.bottom;
+    std::vector<uint32_t> shown(static_cast<size_t>(std::max(cw, 0)) * std::max(ch, 0));
+    if (cw > 0 && ch > 0) {
+        HDC wdc = GetDC(hwnd);
+        HDC mdc = CreateCompatibleDC(wdc);
+        HBITMAP bmp = CreateCompatibleBitmap(wdc, cw, ch);
+        HGDIOBJ old = SelectObject(mdc, bmp);
+        BitBlt(mdc, 0, 0, cw, ch, wdc, 0, 0, SRCCOPY);
+        SelectObject(mdc, old);
+        BITMAPINFO bi{};
+        bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+        bi.bmiHeader.biWidth = cw;
+        bi.bmiHeader.biHeight = -ch;
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+        GetDIBits(mdc, bmp, 0, static_cast<UINT>(ch), shown.data(), &bi, DIB_RGB_COLORS);
+        DeleteObject(bmp);
+        DeleteDC(mdc);
+        ReleaseDC(hwnd, wdc);
+        for (uint32_t& p : shown) p |= 0xFF000000u;
+    }
+    const HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    const bool frame_ok = !frame.empty() && save_png(base + L"-frame.png", frame.data(), fw, fh);
+    const bool window_ok = !shown.empty() && save_png(base + L"-window.png", shown.data(), cw, ch);
+    if (SUCCEEDED(co)) CoUninitialize();
+    const UINT dpi = window_dpi(hwnd);
+    const char* kind = how == FramePresent::kExact ? "pixel for pixel" : how == FramePresent::kScaled
+                                                                             ? "resampled to the box"
+                                                                             : "stale (not the box's size)";
+    std::fprintf(stderr,
+                 "[win.apk] snapshot: frame %dx%d px drawn at %.3f px/dp (%d dpi), phone %dx%d dp; box %dx%d px "
+                 "shown at %.3f px/dp (x%.2f), %s; monitor %u dpi (%u%%); %s%s -> %s-{frame,window}.png%s\n",
+                 fw, fh, g_surface_scale, static_cast<int>(std::lround(g_surface_scale * 160.0f)), g_phone_w,
+                 g_phone_h, bw, bh, g_shown_scale, fw > 0 ? static_cast<double>(bw) / fw : 0.0, kind, dpi,
+                 dpi * 100 / 96, IsZoomed(hwnd) ? "maximized" : "not maximized",
+                 g_orientation_lock == 1 ? ", portrait lock" : g_orientation_lock == 2 ? ", landscape lock" : "",
+                 narrow(base).c_str(), frame_ok && window_ok ? "" : " (a file could not be written)");
+    MessageBeep(frame_ok && window_ok ? MB_OK : MB_ICONWARNING);
+}
+
+}  // namespace
+
+void window_set_snapshot_dir(const std::wstring& dir, const std::wstring& app) {
+    std::lock_guard<std::mutex> hold(g_snapshot_lock);
+    g_snapshot_dir = dir;
+    g_snapshot_app = app;
+}
 
 bool window_set_icon_png(const std::wstring& path) {
     if (!g_hwnd) return false;

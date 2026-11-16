@@ -68,6 +68,14 @@ lacks it.
 app may need Google's own Play services: see [Google services](google-services.md).
 In-app purchases and Play Integrity do not work.
 
+**The Play Store keeps showing "Server error" (DF-DFERH-01).** Play services
+has not checked in with Google yet, so the store has no device id (its log says
+`Unexpected android-id = 0`). The check-in's own log is
+`logs\services\com.google.android.gms.log`: look for `Checkin failed`. A
+`PKIX path building failed` there means a server's certificate was refused;
+the line tagged `MacApkTrust` just before it names the server, the certificates
+it sent and who issued them, which is what to attach to a report.
+
 **The camera, location or Wi-Fi names are missing.** Windows' privacy switches
 apply: Settings > Privacy & security > Camera, Microphone or Location, with
 access for desktop apps on. Wi-Fi network names need location access too, as on
@@ -135,7 +143,11 @@ What makes a report useful:
 - where the APK came from (F-Droid, APKMirror, the app's site) and which
   variant (x86_64, arm64-v8a, a bundle);
 - the exact steps, and what you expected;
-- a screenshot at the moment it goes wrong;
+- a screenshot at the moment it goes wrong; for text or pictures that look
+  blurry or broken, press **Ctrl+Shift+F12** in the app's window instead: it
+  saves the app's own picture and the window as shown, side by side, in the
+  logs folder (`snapshot-...-frame.png`, `snapshot-...-window.png`), and writes
+  the numbers between the two into the log;
 - **the whole log**, not a part of it.
 
 You can write in English or in Hebrew. Security problems go to

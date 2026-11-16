@@ -549,7 +549,7 @@ how CI boots apps.
 | Images | libwebp for WebP, WIC for the rest | `native_image.cpp` |
 | Notifications | `NotificationManager` posts to `HostNotifications`, whose natives show Windows.UI.Notifications toasts (WinRT C ABI, combase loaded at run time) under the app's AppUserModelID, which the launcher writes on the app's Start menu shortcut; a click comes back through `HostNotifications.onActivated` and `PendingIntent.send()` | `native_notifications.cpp` |
 | WebView, Custom Tabs, App Link sign-in | Microsoft Edge WebView2, shown in the app window behind the views drawn over it; `shouldInterceptRequest`, JavaScript interfaces, cookies; a Custom Tab is a tab window whose navigations are checked against the app's manifest; a browser sign-in whose `redirect_uri` is one of the app's verified App Links (or its own link scheme) opens in the same window, which hands back only that redirect (`applink_match.h`) | `native_webview.cpp`, `webview2_host.cpp`, `native_browser_tab.cpp` |
-| Camera (camera2, Camera, CameraX) | Media Foundation capture, each webcam offered as a back and a front camera; a virtual camera when there is none. Preview and analysis frames, and stills as JPEG (encoded in Java from the captured frame); no video recording | `native_camera.cpp` |
+| Camera (camera2, Camera, CameraX) | Media Foundation capture, each webcam offered as a back and a front camera; a virtual camera when there is none. Preview and analysis frames, and stills as JPEG (encoded in Java from the captured frame); no video recording. `ACTION_IMAGE_CAPTURE` opens the host's camera window (`CameraCaptureHandler`, `nativeCapture`: a Win32 window on its own thread, owned by the app's and disabling it; WIC encodes the JPEG, which Java writes to `EXTRA_OUTPUT`) | `native_camera.cpp` |
 | Location | `Windows.Devices.Geolocation`; Windows' privacy settings are the authorization | `native_location.cpp` |
 | Connectivity | `ConnectivityManager`, `NetworkCapabilities` and `LinkProperties` answer from the adapter that carries the default route (`HostRadios.defaultNetwork`: `GetBestInterfaceEx` for a public address, then that adapter in `GetAdaptersAddresses`): Ethernet, Wi-Fi, mobile broadband or a tunnel as the transport and the legacy network type, its addresses, DNS servers, MTU and the JDK's name for it; no default route is "no network". Polled every two seconds for `NetworkCallback`. "Validated" means only that there is a default route, and no connection is reported as metered. `NsdManager` (mDNS service discovery) is not implemented: every request reports `FAILURE_INTERNAL_ERROR` to its listener | `native_radios.cpp` |
 | Wi-Fi | `HostRadios` over the Native Wifi API: state, the current connection (SSID, BSSID, RSSI, frequency, link speed), the DHCP configuration from `GetAdaptersAddresses`, scans, and `WlanRegisterNotification` events pumped by one Java thread into the state, connection, signal and scan-results broadcasts. Network names need Windows' location access, as Android needs the location permission | `native_radios.cpp` |
@@ -753,8 +753,14 @@ tests the transport and the broker's checks across three processes.
    device layout under `android\data\app\~~<nonce>\<package>-<nonce>\`:
    `base.apk` (a hard link for a plain APK), `split_<name>.apk` chosen as
    upstream chooses them, and the native libraries of the first ABI in
-   `x86_64,arm64-v8a` the app has, under `lib\<isa>\`. A record file notes
-   the result so the step runs once per input file.
+   `x86_64,arm64-v8a` the app has, under `lib\<isa>\`. Libraries a later ABI
+   has and that one lacks (an arm64-only SDK in an x86_64 build) go to
+   `lib\arm64\` with the arm64 libraries they need (`DT_NEEDED`, followed):
+   `findLibrary` looks there for a library `lib\x86_64\` lacks, the guest
+   linker gives an arm64 library the arm64 copies of its dependencies even
+   where an x86_64 library of that name is loaded, and the background
+   translation sees only those. A record file notes the result so the step
+   runs once per input file.
 3. `com.winapk.tools.AppMeta` renders the launcher icon to
    `apps\<name>\icon.png`, and writes the label and `package.txt` (package,
    versionCode, versionName, the first activity's manifest

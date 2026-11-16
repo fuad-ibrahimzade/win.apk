@@ -208,6 +208,25 @@ public final class InstalledSplits {
         return new File(libRoot, hostIsa);
     }
 
+    /** The install dir's other lib/<isa>/ directories, after nativeLibDir's:
+     *  where Win.apk's installer (windows/java/.../AppInstall) puts the
+     *  libraries only a later ABI of the app has (an arm64-only SDK in an app
+     *  installed for x86_64), with the libraries of that ABI they need. A
+     *  device has no such directory; the host runs arm64 code, so a library
+     *  missing from nativeLibDir is looked for here (AppClassLoader.
+     *  locateApkSo). Empty when there is none. */
+    public static java.util.List<File> fallbackLibDirs(String apkPath) {
+        java.util.List<File> out = new java.util.ArrayList<>();
+        File inst = installDirOf(apkPath);
+        File primary = nativeLibDir(apkPath);
+        if (inst == null || primary == null) return out;
+        for (String isa : new String[] { "arm64" }) {
+            File d = new File(new File(inst, "lib"), isa);
+            if (d.isDirectory() && !d.getAbsoluteFile().equals(primary.getAbsoluteFile())) out.add(d);
+        }
+        return out;
+    }
+
     public static boolean isSplitFileName(String name) {
         return name != null
             && name.startsWith(SPLIT_PREFIX) && name.endsWith(APK_SUFFIX)

@@ -10,7 +10,9 @@
 // reference counts, destructors, TLS, RTLD_NODELETE, thread_local
 // destructors holding a library, and dependencies going with their root.
 // Four more libraries check the order symbols are looked up in: libc at its
-// place in the DT_NEEDED order, the global group before it.
+// place in the DT_NEEDED order, the global group before it. And an arm64
+// library of an x86_64 app gets the arm64 copy of a dependency whose x86_64
+// copy is loaded (test/guest/mixed_guest.c, in arm64/ under the directory).
 //
 // Exit code: the number of failed checks.
 
@@ -251,6 +253,26 @@ int main(int argc, char** argv) {
     }
     check("RTLD_DEFAULT finds the global library before libc",
           from_interpose(linker.lookup(nullptr, "strlen", nullptr, &error)));
+
+    // An x86_64 app with a library only its arm64 set has (AppInstall puts that set in lib/arm64): the
+    // arm64 library's dependency is the arm64 copy beside it, although an x86_64 library of that name is
+    // loaded, which stays as it is. Nothing here runs arm64 code; mixed_guest.c has no constructors.
+    error.clear();
+    winapk::set_android_root(argv[1]);  // the arm64 libraries by Android path: <dir>/arm64/
+    void* dep86 = linker.open("libwinapk_mixed_dep.so", winapk::GuestLinker::kRtldNow, &error);
+    check("open the x86_64 libwinapk_mixed_dep.so", dep86 != nullptr, error);
+    void* mixed = linker.open("/arm64/libwinapk_mixed_root.so", winapk::GuestLinker::kRtldNow, &error);
+    check("open an arm64 library that needs a name an x86_64 library has", mixed != nullptr, error);
+    if (dep86 && mixed) {
+        void* bound = linker.lookup(mixed, "mixed_dep_abi", nullptr, &error);
+        const winapk::ElfImage* image = linker.image_containing(bound);
+        check("its dependency is the arm64 copy",
+              image && image->machine() == winapk::elf::kEmAarch64 && loaded(linker, "/arm64/libwinapk_mixed_dep.so"));
+        check("the x86_64 copy is still the one its name finds",
+              linker.open("libwinapk_mixed_dep.so", winapk::GuestLinker::kRtldNoLoad, &error) == dep86);
+        linker.close(dep86, &error);  // the kRtldNoLoad reference
+    }
+    winapk::set_android_root("");
 
     std::printf("\n%s: %d failure(s)\n", g_failures ? "FAILED" : "OK", g_failures);
     return g_failures;

@@ -189,6 +189,7 @@ In an app:
 | Keyboard | Key presses, and the characters your keyboard layout types, into text fields: dead keys (an accent, then the letter), AltGr, Caps Lock |
 | An input method (Chinese, Japanese, Korean, the emoji panel) | Text. The text being composed shows in the field itself when the field supports it (most do), otherwise in a small window of Windows' until it is final |
 | **Escape**, **Alt+Left**, the mouse's back button | Android's Back |
+| **Ctrl+Shift+F12** | A snapshot of the display for a problem report: the app's picture as it drew it and the window as you see it, in the logs folder (`snapshot-<app>-<time>-frame.png` and `-window.png`), with a line in the app's log giving its density and the scale it is shown at. A short sound says it is saved |
 | Close the window | The app quits as an Android app leaves the screen: the window goes at once, the app is paused, stopped and destroyed (so it saves what it saves on a phone), and then it ends. An app that does not answer is ended after two seconds |
 | Minimize the window | The app goes to the background (paused and stopped), and comes back when you restore the window |
 | Resize or snap the window | A display of the new size; the app lays itself out again |
@@ -321,7 +322,9 @@ The window is the app's display. Dragging an edge, maximizing or snapping
 gives the app a display of the new size, and it lays itself out again, as an
 Android desktop window does. An app that fixed its orientation keeps its
 shape in a window of the other one: it is drawn in the largest box of its
-aspect, centred, with black bars around it.
+aspect, centred, with black bars around it. The orientation belongs to the
+screen on top: when a screen that turned the phone closes (a landscape-only
+cheque scanner in a portrait app), the screen under it gets its own back.
 
 Maximizing is turning the phone: the app's display keeps the phone's short
 side and becomes as long as the screen is wide (360 x 800 dp becomes about
@@ -403,7 +406,11 @@ is running, as Android does.
 Granting a permission does not create the data behind it: a PC has no
 contacts, SIM, SMS or sensors, so an app that is granted those finds them
 empty. The camera and microphone use the PC's webcam and microphone, behind
-Windows' own privacy switches (Settings > Privacy). Location comes from
+Windows' own privacy switches (Settings > Privacy). An app that asks the
+system camera for a picture (a "take a photo" button) gets Win.apk's camera
+window: the webcam's picture, **Take photo**, then **Use photo** or
+**Retake**; **Choose a file…** sends a picture file instead, for a PC with no
+camera or one that faces you. Location comes from
 Windows' location service; when Windows denies it, Win.apk opens the Windows
 location settings page once per run.
 

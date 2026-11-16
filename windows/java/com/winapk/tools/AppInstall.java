@@ -29,6 +29,14 @@
 //    libraries for, as a device picks from its SUPPORTED_ABIS: the host
 //    passes x86_64,arm64-v8a, so an app's x86_64 build is used when it has
 //    one and its arm64 build (run through the interpreter) otherwise.
+//  - Where a later ABI of the list has libraries the chosen one lacks (an
+//    SDK that ships arm64 only: Mercantile's x86_64 split has no
+//    libScanovateImagingCheque2.so, its cheque scanner), those go to that
+//    ABI's lib/<isa>/ too, with the libraries of that ABI they need, as
+//    their DT_NEEDED entries name them. A device would fail to load them;
+//    Win.apk runs arm64 code, so the runtime loads them from there
+//    (InstalledSplits.fallbackLibDirs). Only those: the background
+//    translation translates whatever is in lib/arm64.
 //
 // The installed base.apk's path is written to the record file, which the host
 // reads back and also uses to tell an install is current.
@@ -47,12 +55,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
@@ -138,6 +150,12 @@ public final class AppInstall {
             int libs = 0;
             Path libDir = dir.resolve("lib").resolve(isaOf(abi));
             for (Path m : members) libs += extractLibs(dir.resolve(m.getFileName()), abi, libDir);
+            List<Path> installed = new ArrayList<>();
+            for (Path m : members) installed.add(dir.resolve(m.getFileName()));
+            for (String other : preference) {
+                if (other.equals(abi)) continue;
+                installOnlyIn(installed, abi, other, dir.resolve("lib").resolve(isaOf(other)));
+            }
 
             Files.writeString(dir.resolve(".installed"), members.size() + " " + Files.size(source) + ":"
                     + Files.getLastModifiedTime(source).toMillis() + "\n");
@@ -181,6 +199,116 @@ public final class AppInstall {
             }
         }
         return true;
+    }
+
+    /** The libraries of `other` that `abi` lacks, with the libraries of
+     *  `other` they need (DT_NEEDED, transitively), into `libDir`. */
+    static void installOnlyIn(List<Path> apks, String abi, String other, Path libDir) throws IOException {
+        Set<String> have = libNames(apks, abi);
+        Set<String> theirs = libNames(apks, other);
+        if (have.isEmpty() || theirs.isEmpty()) return;
+        Set<String> missing = new TreeSet<>(theirs);
+        missing.removeAll(have);
+        if (missing.isEmpty()) return;
+        Set<String> take = new LinkedHashSet<>();
+        ArrayDeque<String> queue = new ArrayDeque<>(missing);
+        while (!queue.isEmpty()) {
+            String name = queue.poll();
+            if (!take.add(name)) continue;
+            byte[] elf = libBytes(apks, other, name);
+            if (elf == null) continue;
+            for (String dep : neededOf(elf)) {
+                if (theirs.contains(dep) && !take.contains(dep)) queue.add(dep);
+            }
+        }
+        int n = 0;
+        Files.createDirectories(libDir);
+        for (String name : take) {
+            byte[] elf = libBytes(apks, other, name);
+            if (elf == null) continue;
+            Files.write(libDir.resolve(name), elf);
+            n++;
+        }
+        System.err.println("[install] " + other + " has " + missing.size() + " librar"
+                + (missing.size() == 1 ? "y" : "ies") + " " + abi + " lacks " + missing + ": " + n + " " + other
+                + " libraries (with what they need) -> " + libDir);
+    }
+
+    /** The file names of lib/<abi>/*.so across the APKs. */
+    static Set<String> libNames(List<Path> apks, String abi) throws IOException {
+        Set<String> names = new TreeSet<>();
+        String prefix = "lib/" + abi + "/";
+        for (Path apk : apks) {
+            try (ZipFile zip = new ZipFile(apk.toFile())) {
+                for (Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements(); ) {
+                    String name = e.nextElement().getName();
+                    if (!name.startsWith(prefix) || !name.endsWith(".so")) continue;
+                    String file = name.substring(prefix.length());
+                    if (!file.contains("/")) names.add(file);
+                }
+            }
+        }
+        return names;
+    }
+
+    /** lib/<abi>/<name> from the first APK that has it, or null. */
+    static byte[] libBytes(List<Path> apks, String abi, String name) throws IOException {
+        for (Path apk : apks) {
+            try (ZipFile zip = new ZipFile(apk.toFile())) {
+                ZipEntry z = zip.getEntry("lib/" + abi + "/" + name);
+                if (z == null) continue;
+                try (InputStream in = zip.getInputStream(z)) {
+                    return in.readAllBytes();
+                }
+            }
+        }
+        return null;
+    }
+
+    /** DT_NEEDED of an ELF64 little-endian shared library: the dynamic
+     *  section's string table offsets, read through the PT_LOAD that maps the
+     *  table. Empty for anything else. */
+    static List<String> neededOf(byte[] elf) {
+        List<String> out = new ArrayList<>();
+        ByteBuffer b = ByteBuffer.wrap(elf).order(ByteOrder.LITTLE_ENDIAN);
+        try {
+            if (elf.length < 64 || b.getInt(0) != 0x464c457f || elf[4] != 2 || elf[5] != 1) return out;
+            long phoff = b.getLong(32);
+            int phentsize = b.getShort(54) & 0xffff, phnum = b.getShort(56) & 0xffff;
+            long dynOff = -1, dynSize = 0;
+            List<long[]> loads = new ArrayList<>();  // {vaddr, offset, filesz}
+            for (int i = 0; i < phnum; i++) {
+                int p = (int) (phoff + (long) i * phentsize);
+                int type = b.getInt(p);
+                if (type == 1) loads.add(new long[] {b.getLong(p + 16), b.getLong(p + 8), b.getLong(p + 32)});
+                if (type == 2) {
+                    dynOff = b.getLong(p + 8);
+                    dynSize = b.getLong(p + 32);
+                }
+            }
+            if (dynOff < 0) return out;
+            long strtab = -1;
+            List<Long> needed = new ArrayList<>();
+            for (long q = dynOff; q + 16 <= dynOff + dynSize; q += 16) {
+                long tag = b.getLong((int) q), val = b.getLong((int) q + 8);
+                if (tag == 0) break;
+                if (tag == 1) needed.add(val);
+                if (tag == 5) strtab = val;
+            }
+            long strOff = -1;
+            for (long[] l : loads) {
+                if (strtab >= l[0] && strtab < l[0] + l[2]) strOff = strtab - l[0] + l[1];
+            }
+            if (strOff < 0) return out;
+            for (long n : needed) {
+                int start = (int) (strOff + n), end = start;
+                while (end < elf.length && elf[end] != 0) end++;
+                out.add(new String(elf, start, end - start, StandardCharsets.UTF_8));
+            }
+        } catch (RuntimeException malformed) {
+            // Not an ELF this reader understands: no dependencies known.
+        }
+        return out;
     }
 
     /** Whether one APK has lib/<abi>/*.so. */

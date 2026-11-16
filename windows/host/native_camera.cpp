@@ -43,10 +43,15 @@
 #include <vector>
 
 #include <windows.h>
+#include <objidl.h>
+#include <shobjidl.h>
+#include <wincodec.h>
 #include <mfapi.h>
 #include <mferror.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
+
+#include "win32_window.h"
 
 namespace winapk::host {
 
@@ -958,6 +963,611 @@ jlong JNICALL Cam_copyLatestArgb(JNIEnv* env, jclass, jlong h, jintArray dst, ji
     return std::max<jlong>(f->pts, 1);
 }
 
+
+// ---- the camera screen (CameraCaptureHandler: ACTION_IMAGE_CAPTURE) ------------
+//
+// What the camera app's capture activity is on a phone: a live picture from the
+// webcam, Take photo, then Use photo or Retake; Cancel at any time. A PC often
+// has no camera, or one that faces the user, so a picture file can be chosen
+// instead (and is shown for Use photo the same way). The window is owned by the
+// app's window, which is disabled while it is up, as under a modal dialog; it
+// runs on a thread of its own and answers CameraCaptureHandler.macapkOnCaptured
+// with the JPEG, or null for a cancel. The picture is the webcam's frame as it
+// is, not mirrored: what a phone's back camera gives, and text stays readable.
+
+constexpr UINT kMsgStarted = WM_APP + 1;  // wParam: 1 when the camera streams
+constexpr UINT_PTR kTimerFrame = 1;
+constexpr int kBtnTake = 101, kBtnUse = 102, kBtnRetake = 103, kBtnCancel = 104, kBtnFile = 105, kBtnSwitch = 106;
+constexpr int kBarDip = 64, kBtnHeightDip = 32, kBtnGapDip = 8, kBtnPadDip = 24;
+
+std::atomic<bool> g_capture_open{false};
+
+enum CaptureText {
+    kTxtTitle, kTxtTake, kTxtUse, kTxtRetake, kTxtCancel, kTxtFile, kTxtSwitch, kTxtStarting, kTxtNoCamera,
+    kTxtDenied, kTxtFailed, kTxtSaveFailed, kTxtPictures
+};
+
+const wchar_t* capture_text(int key) {
+    static const bool he = ui_hebrew();
+    static const wchar_t* const kEn[] = {
+        L"Camera",
+        L"Take photo",
+        L"Use photo",
+        L"Retake",
+        L"Cancel",
+        L"Choose a file…",
+        L"Switch camera",
+        L"Starting the camera…",
+        L"No camera was found. You can choose a picture file instead.",
+        (L"Camera access is off in Windows settings (Privacy & security > Camera). You can choose a picture file "
+         L"instead."),
+        L"The camera could not be started. Another program may be using it.",
+        L"The picture could not be saved.",
+        L"Pictures",
+    };
+    static const wchar_t* const kHe[] = {
+        L"מצלמה",
+        L"צלם",
+        L"השתמש בתמונה",
+        L"צלם שוב",
+        L"ביטול",
+        L"בחר קובץ…",
+        L"החלף מצלמה",
+        L"מפעיל את המצלמה…",
+        (L"לא נמצאה מצלמה. אפשר "
+         L"לבחור קובץ תמונה "
+         L"במקום."),
+        (L"הגישה למצלמה כבויה "
+         L"בהגדרות Windows (פרטיות "
+         L"ואבטחה > מצלמה). אפשר "
+         L"לבחור קובץ תמונה "
+         L"במקום."),
+        (L"לא ניתן להפעיל את "
+         L"המצלמה. ייתכן שתוכנה "
+         L"אחרת משתמשת בה."),
+        (L"לא ניתן לשמור את "
+         L"התמונה."),
+        L"תמונות",
+    };
+    return (he ? kHe : kEn)[key];
+}
+
+// A picture as 32-bit BGRA rows, top first (a frame of the webcam, or a file).
+struct Picture {
+    std::vector<uint32_t> px;
+    int width = 0, height = 0;
+    bool empty() const { return px.empty(); }
+};
+
+struct CaptureUi {
+    HWND hwnd = nullptr, owner = nullptr;
+    UINT dpi = 96;
+    HFONT font = nullptr;
+    std::map<int, HWND> buttons;
+    int webcams = 0, webcam = 0;  // the physical webcam shown
+    std::shared_ptr<Session> session;
+    enum class State { kStarting, kLive, kNoCamera, kDenied, kFailed, kTaken } state = State::kStarting;
+    Picture live, taken;
+    int64_t shown_pts = 0;
+    std::vector<uint8_t> jpeg;  // the answer
+    bool done = false;
+};
+
+int dip(const CaptureUi& ui, int v) { return MulDiv(v, static_cast<int>(ui.dpi), 96); }
+
+UINT dpi_of(HWND hwnd) {
+    using Fn = UINT(WINAPI*)(HWND);
+    static auto fn = reinterpret_cast<Fn>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow"));
+    const UINT d = fn && hwnd ? fn(hwnd) : 0;
+    return d ? d : 96;
+}
+
+// Starts the session for webcam `ui.webcam` off the window's thread (opening a
+// device can take seconds) and posts kMsgStarted.
+void capture_start(CaptureUi& ui) {
+    if (ui.session) ui.session->stop();
+    ui.session.reset();
+    ui.live = Picture{};
+    ui.shown_pts = 0;
+    ui.state = CaptureUi::State::kStarting;
+    Device d;
+    if (!device_at(ui.webcam * kRolesPerDevice, &d) || d.formats.empty()) {
+        ui.state = CaptureUi::State::kFailed;
+        return;
+    }
+    auto s = std::make_shared<Session>(ui.webcam * kRolesPerDevice, d.link, d.formats);
+    // The largest picture the webcam has: a document or a cheque wants detail.
+    s->configure(4096, 3072, 30);
+    ui.session = s;
+    std::fprintf(stderr, "[camera] capture screen: %s at %dx%d\n", d.name.c_str(), s->width(), s->height());
+    const HWND hwnd = ui.hwnd;
+    std::thread([s, hwnd] {
+        const bool ok = s->start();
+        PostMessageW(hwnd, kMsgStarted, ok ? 1 : 0, reinterpret_cast<LPARAM>(s.get()));
+    }).detach();
+}
+
+void capture_layout(CaptureUi& ui) {
+    for (auto& [id, b] : ui.buttons) DestroyWindow(b);
+    ui.buttons.clear();
+    std::vector<int> ids;  // left to right in English; the first is the default action
+    switch (ui.state) {
+        case CaptureUi::State::kTaken: ids = {kBtnUse, kBtnRetake, kBtnCancel}; break;
+        case CaptureUi::State::kStarting:
+        case CaptureUi::State::kLive:
+            ids = {kBtnTake};
+            if (ui.webcams > 1) ids.push_back(kBtnSwitch);
+            ids.push_back(kBtnFile);
+            ids.push_back(kBtnCancel);
+            break;
+        default: ids = {kBtnFile, kBtnCancel}; break;
+    }
+    const auto label = [](int id) {
+        switch (id) {
+            case kBtnTake: return capture_text(kTxtTake);
+            case kBtnUse: return capture_text(kTxtUse);
+            case kBtnRetake: return capture_text(kTxtRetake);
+            case kBtnFile: return capture_text(kTxtFile);
+            case kBtnSwitch: return capture_text(kTxtSwitch);
+            default: return capture_text(kTxtCancel);
+        }
+    };
+    RECT c{};
+    GetClientRect(ui.hwnd, &c);
+    HDC dc = GetDC(ui.hwnd);
+    HGDIOBJ old = SelectObject(dc, ui.font);
+    std::vector<int> widths;
+    int total = 0;
+    for (int id : ids) {
+        SIZE sz{};
+        const wchar_t* t = label(id);
+        GetTextExtentPoint32W(dc, t, static_cast<int>(wcslen(t)), &sz);
+        const int w = std::max(static_cast<int>(sz.cx) + 2 * dip(ui, kBtnPadDip), dip(ui, 96));
+        widths.push_back(w);
+        total += w;
+    }
+    SelectObject(dc, old);
+    ReleaseDC(ui.hwnd, dc);
+    total += dip(ui, kBtnGapDip) * static_cast<int>(ids.size() - 1);
+    const int h = dip(ui, kBtnHeightDip);
+    const int y = c.bottom - dip(ui, kBarDip) + (dip(ui, kBarDip) - h) / 2;
+    int x = (c.right - total) / 2;
+    const bool rtl = ui_hebrew();
+    for (size_t i = 0; i < ids.size(); ++i) {
+        // Right to left in Hebrew: the default action stays at the reading start.
+        const size_t k = rtl ? ids.size() - 1 - i : i;
+        const DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | (k == 0 ? BS_DEFPUSHBUTTON : BS_PUSHBUTTON);
+        HWND b = CreateWindowExW(rtl ? WS_EX_RTLREADING : 0, L"BUTTON", label(ids[k]), style, x, y, widths[k], h,
+                                 ui.hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ids[k])),
+                                 GetModuleHandleW(nullptr), nullptr);
+        SendMessageW(b, WM_SETFONT, reinterpret_cast<WPARAM>(ui.font), TRUE);
+        if (ids[k] == kBtnTake) EnableWindow(b, ui.state == CaptureUi::State::kLive && !ui.live.empty());
+        ui.buttons[ids[k]] = b;
+        x += widths[k] + dip(ui, kBtnGapDip);
+    }
+    if (!ids.empty()) SetFocus(ui.buttons[ids[0]]);
+    InvalidateRect(ui.hwnd, nullptr, FALSE);
+}
+
+// The newest webcam frame into ui.live; true when it is a new one.
+bool capture_pull(CaptureUi& ui) {
+    auto f = ui.session ? ui.session->latest() : nullptr;
+    if (!f || f->pts == ui.shown_pts) return false;
+    ui.shown_pts = f->pts;
+    ui.live.width = f->width;
+    ui.live.height = f->height;
+    ui.live.px.resize(static_cast<size_t>(f->width) * f->height);
+    convert<true>(*f, ui.live.px.data());
+    return true;
+}
+
+void capture_paint(CaptureUi& ui) {
+    PAINTSTRUCT ps;
+    HDC wdc = BeginPaint(ui.hwnd, &ps);
+    RECT c{};
+    GetClientRect(ui.hwnd, &c);
+    HDC dc = CreateCompatibleDC(wdc);
+    HBITMAP bmp = CreateCompatibleBitmap(wdc, std::max(1L, c.right), std::max(1L, c.bottom));
+    HGDIOBJ oldbmp = SelectObject(dc, bmp);
+    RECT view{0, 0, c.right, c.bottom - dip(ui, kBarDip)};
+    HBRUSH black = CreateSolidBrush(RGB(0, 0, 0));
+    FillRect(dc, &view, black);
+    DeleteObject(black);
+    RECT bar{0, view.bottom, c.right, c.bottom};
+    FillRect(dc, &bar, GetSysColorBrush(COLOR_BTNFACE));
+    const Picture& pic = ui.state == CaptureUi::State::kTaken ? ui.taken : ui.live;
+    const int vw = view.right - view.left, vh = view.bottom - view.top;
+    if (!pic.empty() && vw > 0 && vh > 0) {
+        // The largest box of the picture's aspect, centred.
+        int w = vw, h = static_cast<int>(static_cast<long long>(vw) * pic.height / pic.width);
+        if (h > vh) {
+            h = vh;
+            w = static_cast<int>(static_cast<long long>(vh) * pic.width / pic.height);
+        }
+        BITMAPINFO bi{};
+        bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+        bi.bmiHeader.biWidth = pic.width;
+        bi.bmiHeader.biHeight = -pic.height;  // top-down
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+        SetStretchBltMode(dc, HALFTONE);
+        SetBrushOrgEx(dc, 0, 0, nullptr);
+        StretchDIBits(dc, (vw - w) / 2, (vh - h) / 2, w, h, 0, 0, pic.width, pic.height, pic.px.data(), &bi,
+                      DIB_RGB_COLORS, SRCCOPY);
+    } else {
+        int key = -1;
+        switch (ui.state) {
+            case CaptureUi::State::kStarting:
+            case CaptureUi::State::kLive: key = kTxtStarting; break;
+            case CaptureUi::State::kNoCamera: key = kTxtNoCamera; break;
+            case CaptureUi::State::kDenied: key = kTxtDenied; break;
+            case CaptureUi::State::kFailed: key = kTxtFailed; break;
+            default: break;
+        }
+        if (key >= 0) {
+            HGDIOBJ oldfont = SelectObject(dc, ui.font);
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, RGB(230, 230, 230));
+            RECT t = view;
+            InflateRect(&t, -dip(ui, 32), 0);
+            const UINT rtl = ui_hebrew() ? DT_RTLREADING : 0;
+            RECT m = t;
+            DrawTextW(dc, capture_text(key), -1, &m, DT_CENTER | DT_WORDBREAK | DT_CALCRECT | rtl);
+            const int th = m.bottom - m.top;
+            t.top = view.top + (vh - th) / 2;
+            t.bottom = t.top + th;
+            DrawTextW(dc, capture_text(key), -1, &t, DT_CENTER | DT_WORDBREAK | rtl);
+            SelectObject(dc, oldfont);
+        }
+    }
+    BitBlt(wdc, 0, 0, c.right, c.bottom, dc, 0, 0, SRCCOPY);
+    SelectObject(dc, oldbmp);
+    DeleteObject(bmp);
+    DeleteDC(dc);
+    EndPaint(ui.hwnd, &ps);
+}
+
+// The picture as a JPEG (WIC), quality 0.92. Empty on failure.
+std::vector<uint8_t> encode_jpeg(const Picture& pic) {
+    std::vector<uint8_t> out;
+    Com<IWICImagingFactory> wic;
+    Com<IWICBitmap> bitmap;
+    Com<IStream> stream;
+    Com<IWICBitmapEncoder> encoder;
+    Com<IWICBitmapFrameEncode> frame;
+    Com<IPropertyBag2> props;
+    Com<IWICFormatConverter> bgr;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) ||
+        FAILED(wic->CreateBitmapFromMemory(static_cast<UINT>(pic.width), static_cast<UINT>(pic.height),
+                                           GUID_WICPixelFormat32bppBGRA, static_cast<UINT>(pic.width) * 4,
+                                           static_cast<UINT>(pic.px.size() * 4),
+                                           reinterpret_cast<BYTE*>(const_cast<uint32_t*>(pic.px.data())),
+                                           &bitmap)) ||
+        FAILED(wic->CreateFormatConverter(&bgr)) ||
+        FAILED(bgr->Initialize(bitmap.p, GUID_WICPixelFormat24bppBGR, WICBitmapDitherTypeNone, nullptr, 0,
+                               WICBitmapPaletteTypeCustom)) ||
+        FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &stream)) ||
+        FAILED(wic->CreateEncoder(GUID_ContainerFormatJpeg, nullptr, &encoder)) ||
+        FAILED(encoder->Initialize(stream.p, WICBitmapEncoderNoCache)) ||
+        FAILED(encoder->CreateNewFrame(&frame, &props))) {
+        return out;
+    }
+    PROPBAG2 option{};
+    option.pstrName = const_cast<LPOLESTR>(L"ImageQuality");
+    VARIANT value;
+    VariantInit(&value);
+    value.vt = VT_R4;
+    value.fltVal = 0.92f;
+    props->Write(1, &option, &value);
+    WICPixelFormatGUID format = GUID_WICPixelFormat24bppBGR;
+    if (FAILED(frame->Initialize(props.p)) ||
+        FAILED(frame->SetSize(static_cast<UINT>(pic.width), static_cast<UINT>(pic.height))) ||
+        FAILED(frame->SetPixelFormat(&format)) || FAILED(frame->WriteSource(bgr.p, nullptr)) ||
+        FAILED(frame->Commit()) || FAILED(encoder->Commit())) {
+        return out;
+    }
+    HGLOBAL mem = nullptr;
+    if (FAILED(GetHGlobalFromStream(stream.p, &mem)) || !mem) return out;
+    STATSTG st{};
+    if (FAILED(stream->Stat(&st, STATFLAG_NONAME))) return out;
+    const void* bytes = GlobalLock(mem);
+    if (bytes) {
+        const auto* b = static_cast<const uint8_t*>(bytes);
+        out.assign(b, b + static_cast<size_t>(st.cbSize.QuadPart));
+        GlobalUnlock(mem);
+    }
+    return out;
+}
+
+// A picture file the user chooses (any format WIC decodes), as BGRA.
+bool choose_picture(HWND owner, Picture* out) {
+    Com<IFileOpenDialog> dialog;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))) {
+        return false;
+    }
+    const COMDLG_FILTERSPEC filter[] = {
+        {capture_text(kTxtPictures), L"*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.tif;*.tiff;*.heic;*.webp"}};
+    dialog->SetFileTypes(1, filter);
+    DWORD opts = 0;
+    dialog->GetOptions(&opts);
+    dialog->SetOptions(opts | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
+    if (FAILED(dialog->Show(owner))) return false;
+    Com<IShellItem> item;
+    wchar_t* path = nullptr;
+    if (FAILED(dialog->GetResult(&item)) || FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) return false;
+    Com<IWICImagingFactory> wic;
+    Com<IWICBitmapDecoder> decoder;
+    Com<IWICBitmapFrameDecode> frame;
+    Com<IWICFormatConverter> bgra;
+    UINT w = 0, h = 0;
+    const bool ok =
+        SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) &&
+        SUCCEEDED(wic->CreateDecoderFromFilename(path, nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand,
+                                                 &decoder)) &&
+        SUCCEEDED(decoder->GetFrame(0, &frame)) && SUCCEEDED(wic->CreateFormatConverter(&bgra)) &&
+        SUCCEEDED(bgra->Initialize(frame.p, GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0,
+                                   WICBitmapPaletteTypeCustom)) &&
+        SUCCEEDED(bgra->GetSize(&w, &h)) && w > 0 && h > 0 && w <= 16384 && h <= 16384;
+    CoTaskMemFree(path);
+    if (!ok) return false;
+    out->width = static_cast<int>(w);
+    out->height = static_cast<int>(h);
+    out->px.assign(static_cast<size_t>(w) * h, 0);
+    if (FAILED(bgra->CopyPixels(nullptr, w * 4, w * h * 4, reinterpret_cast<BYTE*>(out->px.data())))) return false;
+    for (uint32_t& p : out->px) p |= 0xFF000000u;  // a JPEG has no alpha: transparency becomes the colour as is
+    return true;
+}
+
+void capture_command(CaptureUi& ui, int id) {
+    switch (id) {
+        case kBtnTake:
+            if (ui.state != CaptureUi::State::kLive || ui.live.empty()) return;
+            ui.taken = ui.live;
+            ui.state = CaptureUi::State::kTaken;
+            capture_layout(ui);
+            return;
+        case kBtnRetake:
+            ui.taken = Picture{};
+            if (ui.session && ui.session->running()) {
+                ui.state = CaptureUi::State::kLive;  // Take is enabled again with the next frame
+            } else if (ui.webcams > 0) {
+                capture_start(ui);
+            } else {
+                ui.state = CaptureUi::State::kNoCamera;
+            }
+            capture_layout(ui);
+            return;
+        case kBtnUse: {
+            if (ui.taken.empty()) return;
+            ui.jpeg = encode_jpeg(ui.taken);
+            if (ui.jpeg.empty()) {
+                MessageBoxW(ui.hwnd, capture_text(kTxtSaveFailed), capture_text(kTxtTitle),
+                            MB_OK | MB_ICONERROR | (ui_hebrew() ? MB_RTLREADING | MB_RIGHT : 0));
+                return;
+            }
+            ui.done = true;
+            DestroyWindow(ui.hwnd);
+            return;
+        }
+        case kBtnFile: {
+            Picture pic;
+            if (!choose_picture(ui.hwnd, &pic)) return;
+            ui.taken = std::move(pic);
+            ui.state = CaptureUi::State::kTaken;
+            capture_layout(ui);
+            return;
+        }
+        case kBtnSwitch:
+            if (ui.webcams < 2) return;
+            ui.webcam = (ui.webcam + 1) % ui.webcams;
+            capture_start(ui);
+            capture_layout(ui);
+            return;
+        case kBtnCancel: DestroyWindow(ui.hwnd); return;
+        default: return;
+    }
+}
+
+LRESULT CALLBACK capture_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    auto* ui = reinterpret_cast<CaptureUi*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    switch (msg) {
+        case WM_NCCREATE: {
+            auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+            break;
+        }
+        case WM_COMMAND:
+            if (ui && HIWORD(wp) == BN_CLICKED) capture_command(*ui, LOWORD(wp));
+            return 0;
+        case WM_TIMER:
+            if (ui && wp == kTimerFrame && ui->state == CaptureUi::State::kLive && capture_pull(*ui)) {
+                if (ui->buttons.count(kBtnTake)) EnableWindow(ui->buttons[kBtnTake], TRUE);
+                RECT c{};
+                GetClientRect(hwnd, &c);
+                c.bottom -= dip(*ui, kBarDip);
+                InvalidateRect(hwnd, &c, FALSE);
+            }
+            return 0;
+        case kMsgStarted:
+            // A start that a switch has since replaced says nothing.
+            if (ui && ui->session && reinterpret_cast<LPARAM>(ui->session.get()) == lp &&
+                ui->state == CaptureUi::State::kStarting) {
+                ui->state = wp ? CaptureUi::State::kLive : CaptureUi::State::kFailed;
+                if (!wp) std::fprintf(stderr, "[camera] capture screen: the camera did not start\n");
+                capture_layout(*ui);
+            }
+            return 0;
+        case WM_SIZE:
+            if (ui && ui->hwnd) capture_layout(*ui);  // not during CreateWindowEx: the buttons come after
+            return 0;
+        case WM_GETMINMAXINFO: {
+            auto* mm = reinterpret_cast<MINMAXINFO*>(lp);
+            const UINT d = dpi_of(hwnd);
+            mm->ptMinTrackSize = POINT{MulDiv(420, static_cast<int>(d), 96), MulDiv(320, static_cast<int>(d), 96)};
+            return 0;
+        }
+        case WM_DPICHANGED:
+            if (ui) {
+                ui->dpi = HIWORD(wp);
+                const RECT* r = reinterpret_cast<const RECT*>(lp);
+                SetWindowPos(hwnd, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+            return 0;
+        case WM_ERASEBKGND: return 1;
+        case WM_PAINT:
+            if (ui) {
+                capture_paint(*ui);
+                return 0;
+            }
+            break;
+        case WM_CLOSE: DestroyWindow(hwnd); return 0;
+        case WM_DESTROY:
+            KillTimer(hwnd, kTimerFrame);
+            PostQuitMessage(0);
+            return 0;
+        default: break;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+// Shows the screen over `owner` (may be null) and runs it to the end, on the
+// calling thread: the JPEG the user chose to use, or empty for a cancel. COM
+// must be initialized single-threaded on that thread (the file dialog's).
+std::vector<uint8_t> run_capture_screen(HWND owner) {
+    static std::once_flag registered;
+    std::call_once(registered, [] {
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = capture_proc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));  // IDC_ARROW
+        wc.lpszClassName = L"WinApkCameraCapture";
+        RegisterClassExW(&wc);
+    });
+    CaptureUi ui;
+    ui.owner = owner;
+    ui.dpi = dpi_of(ui.owner);
+    ui.font = CreateFontW(-MulDiv(10, static_cast<int>(ui.dpi), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                          DEFAULT_PITCH, L"Segoe UI");
+    // Over the app's window, about its height, a 4:3 picture plus the bar.
+    RECT owner_rect{0, 0, 0, 0};
+    if (ui.owner) GetWindowRect(ui.owner, &owner_rect);
+    const int ch = std::clamp(static_cast<int>(owner_rect.bottom - owner_rect.top) - dip(ui, 80), dip(ui, 360),
+                              dip(ui, 640));
+    const int cw = std::max((ch - dip(ui, kBarDip)) * 4 / 3, dip(ui, 480));
+    RECT r{0, 0, cw, ch};
+    AdjustWindowRectEx(&r, WS_OVERLAPPEDWINDOW, FALSE, 0);
+    const int ww = r.right - r.left, wh = r.bottom - r.top;
+    int x = CW_USEDEFAULT, y = CW_USEDEFAULT;
+    if (ui.owner) {
+        x = (owner_rect.left + owner_rect.right - ww) / 2;
+        y = std::max(static_cast<int>(owner_rect.top), static_cast<int>((owner_rect.top + owner_rect.bottom - wh) / 2));
+        HMONITOR mon = MonitorFromWindow(ui.owner, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{sizeof(mi)};
+        if (GetMonitorInfoW(mon, &mi)) {
+            x = std::clamp(x, static_cast<int>(mi.rcWork.left),
+                           std::max(static_cast<int>(mi.rcWork.left), static_cast<int>(mi.rcWork.right) - ww));
+            y = std::clamp(y, static_cast<int>(mi.rcWork.top),
+                           std::max(static_cast<int>(mi.rcWork.top), static_cast<int>(mi.rcWork.bottom) - wh));
+        }
+    }
+    refresh_devices(true);
+    {
+        std::lock_guard<std::mutex> hold(g_devices_lock);
+        ui.webcams = static_cast<int>(g_devices.size());
+    }
+    ui.hwnd = CreateWindowExW(0, L"WinApkCameraCapture", capture_text(kTxtTitle), WS_OVERLAPPEDWINDOW, x, y, ww, wh,
+                              ui.owner, nullptr, GetModuleHandleW(nullptr), &ui);
+    if (ui.hwnd) {
+        if (ui.owner) EnableWindow(ui.owner, FALSE);
+        if (!camera_allowed()) {
+            ui.state = CaptureUi::State::kDenied;
+        } else if (ui.webcams == 0) {
+            ui.state = CaptureUi::State::kNoCamera;
+        } else {
+            capture_start(ui);
+        }
+        std::fprintf(stderr, "[camera] capture screen: %d webcam(s)%s\n", ui.webcams,
+                     ui.state == CaptureUi::State::kDenied ? ", access off in Windows settings" : "");
+        capture_layout(ui);
+        SetTimer(ui.hwnd, kTimerFrame, 33, nullptr);
+        ShowWindow(ui.hwnd, SW_SHOWNORMAL);
+        SetForegroundWindow(ui.hwnd);
+        MSG msg;
+        while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE) {
+                DestroyWindow(ui.hwnd);
+                continue;
+            }
+            if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN) {
+                // The focused button, as in a dialog; else the default action.
+                const HWND focus = GetFocus();
+                int id = ui.state == CaptureUi::State::kTaken ? kBtnUse : kBtnTake;
+                for (const auto& [bid, b] : ui.buttons) {
+                    if (b == focus) id = bid;
+                }
+                capture_command(ui, id);
+                continue;
+            }
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        if (ui.owner) {
+            EnableWindow(ui.owner, TRUE);
+            SetForegroundWindow(ui.owner);
+        }
+    }
+    if (ui.session) ui.session->stop();
+    ui.session.reset();
+    DeleteObject(ui.font);
+    std::fprintf(stderr, "[camera] capture screen: %s\n",
+                 ui.done ? (std::to_string(ui.jpeg.size()) + " bytes").c_str() : "cancelled");
+    return ui.done ? std::move(ui.jpeg) : std::vector<uint8_t>{};
+}
+
+void capture_thread(JavaVM* vm, jclass handler, jlong id) {
+    const HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    const std::vector<uint8_t> jpeg = run_capture_screen(static_cast<HWND>(window_handle()));
+    if (SUCCEEDED(co)) CoUninitialize();
+    JNIEnv* env = nullptr;
+    if (vm->AttachCurrentThreadAsDaemon(reinterpret_cast<void**>(&env), nullptr) == JNI_OK) {
+        jbyteArray bytes = nullptr;
+        if (!jpeg.empty()) {
+            bytes = env->NewByteArray(static_cast<jsize>(jpeg.size()));
+            if (bytes) {
+                env->SetByteArrayRegion(bytes, 0, static_cast<jsize>(jpeg.size()),
+                                        reinterpret_cast<const jbyte*>(jpeg.data()));
+            }
+        }
+        jmethodID done = env->GetStaticMethodID(handler, "macapkOnCaptured", "(J[B)V");
+        if (done) env->CallStaticVoidMethod(handler, done, id, bytes);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        env->DeleteGlobalRef(handler);
+        vm->DetachCurrentThread();
+    }
+    g_capture_open = false;
+}
+
+jboolean JNICALL Capture_available(JNIEnv*, jclass) { return JNI_TRUE; }
+
+// One screen at a time: a second request while one is up is a cancel.
+jboolean JNICALL Capture_capture(JNIEnv* env, jclass cls, jlong id) {
+    if (g_capture_open.exchange(true)) return JNI_FALSE;
+    JavaVM* vm = nullptr;
+    if (env->GetJavaVM(&vm) != JNI_OK) {
+        g_capture_open = false;
+        return JNI_FALSE;
+    }
+    auto handler = static_cast<jclass>(env->NewGlobalRef(cls));
+    std::thread(capture_thread, vm, handler, id).detach();
+    return JNI_TRUE;
+}
+
+constexpr const char* kCaptureCls = "com.macapk.loader.CameraCaptureHandler";
+
 constexpr const char* kCls = "com.macapk.loader.CameraBridge";
 
 const HostMethod kMethods[] = {
@@ -991,6 +1601,8 @@ const HostMethod kMethods[] = {
     WINAPK_HOST_NATIVE(kCls, "nativeLatestTimestamp", "(J)J", Cam_latestTimestamp),
     WINAPK_HOST_NATIVE(kCls, "nativeCopyLatestRgba", "(JLjava/nio/ByteBuffer;[I)J", Cam_copyLatestRgba),
     WINAPK_HOST_NATIVE(kCls, "nativeCopyLatestArgb", "(J[I[I)J", Cam_copyLatestArgb),
+    WINAPK_HOST_NATIVE(kCaptureCls, "nativeAvailable", "()Z", Capture_available),
+    WINAPK_HOST_NATIVE(kCaptureCls, "nativeCapture", "(J)Z", Capture_capture),
 };
 
 }  // namespace

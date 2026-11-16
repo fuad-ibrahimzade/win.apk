@@ -116,6 +116,7 @@ jobs:
           path: |
             ${{ runner.temp }}/guest/*.so
             ${{ runner.temp }}/guest/link/*.so
+            ${{ runner.temp }}/guest/link/arm64/*.so
             ${{ runner.temp }}/guest/arm64/*.so
             ${{ runner.temp }}/guest/e2e/libwinapk_jni_guest.so
             ${{ runner.temp }}/guest/e2e/arm64/libwinapk_jni_guest.so

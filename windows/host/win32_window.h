@@ -172,6 +172,9 @@ void window_restore();
 bool window_set_icon_png(const std::wstring& path);
 // The color shown until the first frame (the theme's windowBackground).
 void window_set_background(uint32_t argb);
+// Where Ctrl+Shift+F12 saves a snapshot of the display (window_snapshot), and
+// the app's name for the files: the data directory's logs folder.
+void window_set_snapshot_dir(const std::wstring& dir, const std::wstring& app);
 // Copies the frame; it is painted on the UI thread. A frame at the size the
 // app was asked to draw is shown pixel for pixel (window_frame_present).
 void window_present(const uint32_t* argb, int w, int h);

@@ -985,7 +985,12 @@ every such change is listed here:
   manifest's `screenOrientation` at launch (`NativeCocoa.applyWindowOrientation`,
   the same native the policy's branch uses), so a portrait-only app opens
   portrait although the library opens apps landscape. A host without the
-  native keeps the old behaviour.
+  native keeps the old behaviour. When that activity finishes, the one it
+  reveals turns the phone back (`windowOrientationOnRevealed`): its own fixed
+  orientation (the manifest's, or its `setRequestedOrientation`), or, for a
+  free one, the user rotation when the finished activity had fixed a side.
+  Before, a landscape-only activity (Mercantile's cheque scanner) left its
+  portrait app landscape.
 
 - `runtime/java/com/macapk/loader/HostVideo.java` (new): MediaPlayer's video
   player on the host (`windows/host/native_media_video.cpp`): a thread pulls
@@ -1508,6 +1513,34 @@ every such change is listed here:
     (`AccessibilityEvent.getTextChangeTypes`, `Network.CREATOR`,
     `OsConstants.PROT_READ`, `Context.bindService(.., BindServiceFlags)`,
     `android.icu.text.IDNA`, `sun.misc.Cleaner` and about fifty more).
+- `runtime/java/android/security/MacApkTrustProvider.java`: a server chain the
+  default trust manager refuses is logged once per host and reason (tag
+  `MacApkTrust`): the chain as sent, the anchors the manager holds, the SNI
+  name and whose TLS stack asked. Play services' check-in failing with "PKIX
+  path building failed" behind it all (android-id 0, the Play Store's server
+  errors) could not be told apart from that message alone.
+- `runtime/java/android/accounts/AccountManager.java`: a Google account added
+  through Win.apk's sign-in window (the Play Store's Sign in) is announced to
+  the caller's own listeners and receivers before the add's result is posted,
+  as AOSP sends LOGIN_ACCOUNTS_CHANGED first. The broker's broadcast came after
+  it, and the Play Store took the add for a cancel until it was restarted.
+- `runtime/java/com/macapk/loader/InstalledSplits.java`, `AppClassLoader.java`:
+  `fallbackLibDirs` is the install dir's `lib/arm64/` when it is not the
+  native library directory: where `AppInstall` puts the arm64 libraries an
+  x86_64 build lacks, with what they need. `locateApkSo` looks there for a
+  library the native library directory lacks, and `stage6SourceStillPresent`
+  no longer takes a library of the x86_64 set for an arm64 one whose source
+  is gone (which would have translated it again at every start).
+- `runtime/java/com/macapk/loader/CameraCaptureHandler.java` (new),
+  `ActivityHost.java`, `MacApkPackageManager.java`: `MediaStore.ACTION_IMAGE_CAPTURE`
+  (and `_SECURE`) resolve to the camera app's capture activity
+  (`com.android.camera2`, listed by `queryIntentActivities`, startable by that
+  component too) and open the host's camera screen (`native_camera.cpp`,
+  `nativeCapture`): the JPEG goes to `EXTRA_OUTPUT` (or the intent's ClipData)
+  through the app's own `ContentResolver`, or a thumbnail comes back in the
+  `data` extra; RESULT_CANCELED when the user cancels. Nothing resolved them
+  before, so "take a photo" buttons were dead. `MACAPK_IMAGE_CAPTURE=0` leaves
+  them unresolved.
 
 ## License
 
