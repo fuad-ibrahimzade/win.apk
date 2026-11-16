@@ -586,10 +586,20 @@ final class WinNTFileSystem extends FileSystem {
     public boolean setPermission(File f, int access, boolean enable, boolean owneronly) {
         long comp = Blocker.begin();
         try {
-            return setPermission0(host(f), access, enable, owneronly);
+            if (setPermission0(host(f), access, enable, owneronly)) return true;
         } finally {
             Blocker.end(comp);
         }
+        // Win.apk: the JDK changes the write bit of files only (the read-only attribute means
+        // nothing on a Windows directory) and answers false for a directory, where chmod on
+        // Android succeeds. Facebook's SoLoader takes the write permission off the directory
+        // it unpacked its libraries into, treats false as an I/O error and ends the app
+        // ("error removing .../lib-compressed write permission"). The directory is the app's
+        // own and stays as it is: done.
+        return access == ACCESS_WRITE && isDirectory(f);
+    }
+    private boolean isDirectory(File f) {
+        return (getBooleanAttributes(f) & BA_DIRECTORY) != 0;
     }
     private native boolean setPermission0(File f, int access, boolean enable, boolean owneronly);
 
@@ -649,10 +659,11 @@ final class WinNTFileSystem extends FileSystem {
     public boolean setReadOnly(File f) {
         long comp = Blocker.begin();
         try {
-            return setReadOnly0(host(f));
+            if (setReadOnly0(host(f))) return true;
         } finally {
             Blocker.end(comp);
         }
+        return isDirectory(f);  // Win.apk: as setPermission, for a directory
     }
     private native boolean setReadOnly0(File f);
 
@@ -706,7 +717,10 @@ final class WinNTFileSystem extends FileSystem {
                 }
                 if (error == 0) return true;
                 try {
-                    java.nio.file.Files.move(f1.toPath(), f2.toPath(),
+                    // The host files the two Android paths name: the JDK's move takes a path as
+                    // Windows spells it.
+                    java.nio.file.Files.move(java.nio.file.Path.of(WinApkPaths.hostPath(f1.getPath())),
+                                             java.nio.file.Path.of(WinApkPaths.hostPath(f2.getPath())),
                                              java.nio.file.StandardCopyOption.REPLACE_EXISTING,
                                              java.nio.file.StandardCopyOption.ATOMIC_MOVE);
                     return true;

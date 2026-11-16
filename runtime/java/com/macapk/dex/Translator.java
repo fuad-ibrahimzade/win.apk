@@ -815,6 +815,10 @@ public final class Translator {
              *  this part's, and a range end must never bind to it. */
             final java.util.TreeMap<Integer, CodeWriter.Label> cloneLabels =
                     new java.util.TreeMap<>();
+            /** Win.apk: the labels inside this part's handler copies that a branch
+             *  of the same copy targets, each with the DEX offset whose state is its
+             *  frame (MethodSplitter.cloneableHandlers allows a short forward branch). */
+            final List<Object[]> cloneInnerLabels = new ArrayList<>();
 
             PartState(int index, CodeWriter writer, MethodSplitter.Part part) {
                 this.index = index;
@@ -871,6 +875,11 @@ public final class Translator {
                 for (Map.Entry<Integer, CodeWriter.Label> e : cloneLabels.entrySet()) {
                     CodeWriter.Label l = e.getValue();
                     if (l.offset >= 0) bytecodeToDex.put(l.offset, e.getKey());
+                }
+                // A branch target inside a copy: the state at that instruction.
+                for (Object[] inner : cloneInnerLabels) {
+                    CodeWriter.Label l = (CodeWriter.Label) inner[0];
+                    if (l.offset >= 0) bytecodeToDex.put(l.offset, (Integer) inner[1]);
                 }
             }
         }
@@ -1584,7 +1593,14 @@ public final class Translator {
             }
         }
 
+        /** Non-null while a handler copy is being emitted: its branch targets. */
+        Map<Integer, CodeWriter.Label> cloneInner;
+
         CodeWriter.Label labelFor(int dexOffset) {
+            if (cloneInner != null) {
+                CodeWriter.Label inner = cloneInner.get(dexOffset);
+                if (inner != null) return inner;
+            }
             if (split != null) {
                 int pi = split.partIndexOf(dexOffset);
                 if (pi > cur.index) return portalFor(dexOffset);
@@ -1783,10 +1799,12 @@ public final class Translator {
          * another part holds (MethodSplitter.CLONE_HANDLERS). Runs after
          * bindRangeEndsUpTo and the portals, so a copy sits outside every
          * range of the part, as a handler body must not be covered by the
-         * range it serves. The planner guarantees the block is a straight line
-         * ending in throw or return that only an exception edge enters, so the
-         * copy needs no label but its first, and the frame there is the
-         * handler's own (frameFor via cloneLabels / handlerEntryTypes).
+         * range it serves. The planner guarantees the block ends in throw or
+         * return on every path, that only an exception edge enters it, and that
+         * a branch in it goes forward to an instruction of the same block: the
+         * copy has a label at its first instruction, whose frame is the
+         * handler's own (frameFor via cloneLabels / handlerEntryTypes), and one
+         * at each such branch target (cloneInnerLabels).
          */
         void emitHandlerClones() {
             if (split == null) return;
@@ -1807,13 +1825,44 @@ public final class Translator {
                 out.mark(l);
                 cur.cloneLabels.put(h, l);
                 cur.handlerEntryTypes.put(h, handlerTypes.get(h));
+                // The copy's own label for each instruction a branch of the copy
+                // targets; labelFor answers with these while the copy is emitted,
+                // where the DEX offset would otherwise name the original, in
+                // another part.
+                Map<Integer, CodeWriter.Label> inner = new HashMap<>();
                 for (int o : split.cloneBlock(h)) {
                     TypeInference.Insn insn = byOffset.get(o);
-                    if (insn == null) {
-                        throw new TranslationException("handler copy: no instruction at 0x"
-                                + Integer.toHexString(o));
+                    if (insn == null) continue;
+                    int fam = TypeInference.familyOf(insn.opcode);
+                    if (fam != TypeInference.F_IF && fam != TypeInference.F_IFZ) continue;
+                    int target = (int) insn.args[fam == TypeInference.F_IF ? 2 : 1];
+                    if (!inner.containsKey(target)) {
+                        CodeWriter.Label t = out.newLabel("handler-copy@0x" + Integer.toHexString(h)
+                                + "+0x" + Integer.toHexString(target));
+                        labelOwner.put(t, out);
+                        inner.put(target, t);
+                        cur.cloneInnerLabels.add(new Object[]{ t, target });
                     }
-                    emitOne(insn, types.typesFor(o));
+                }
+                cloneInner = inner;
+                try {
+                    for (int o : split.cloneBlock(h)) {
+                        TypeInference.Insn insn = byOffset.get(o);
+                        if (insn == null) {
+                            throw new TranslationException("handler copy: no instruction at 0x"
+                                    + Integer.toHexString(o));
+                        }
+                        CodeWriter.Label here = inner.get(o);
+                        if (here != null) out.mark(here);
+                        emitOne(insn, types.typesFor(o));
+                    }
+                } finally {
+                    cloneInner = null;
+                }
+                for (CodeWriter.Label t : inner.values()) {
+                    if (!t.isMarked()) {
+                        throw new TranslationException("handler copy: a branch leaves the copy");
+                    }
                 }
             }
         }
@@ -2458,6 +2507,13 @@ public final class Translator {
                     CodeWriter.Label here = out.newLabel();
                     out.mark(here);
                     newLabels.put(insn.offset, here);
+                    // Owned by the writer it is marked in, as labelFor's are: without
+                    // this ownerOf() answers mainWriter, and a frame in a chain part
+                    // that names this `new` (an uninitialized reference kept in a
+                    // register across a branch target) was taken for one that crossed
+                    // a part boundary. Telegram 12.10's ChatMessageCell.setMessageContent
+                    // is split in three, and the whole class was lost to that.
+                    labelOwner.put(here, out);
                     out.typeOp(CodeWriter.NEW,
                         DexFile.internalName(dex.typeDescriptor((int) insn.args[1])));
                     if (deferredNew.containsKey(insn.offset)) {

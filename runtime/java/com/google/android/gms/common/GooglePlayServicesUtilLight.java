@@ -113,6 +113,14 @@ public class GooglePlayServicesUtilLight {
 
     // Must stay false: the caller remaps a true here into SERVICE_UPDATING(18),
     // i.e. "ask the user to wait", which would be a lie about a transient state.
+    // Win.apk: the same question with its parameters the other way round. R8 reorders a method's
+    // parameters when that lets it share a prototype, and does so across the app's whole copy of
+    // play-services-basement, so the app's GoogleApiAvailabilityLight calls this class, which is
+    // answered here and not by the app's copy (a device oracle, AppClassLoader), by a descriptor
+    // the library never had. eBay's start met NoSuchMethodError on three threads.
+    public static int isGooglePlayServicesAvailable(int minApkVersion, Context context) {
+        return isGooglePlayServicesAvailable(context, minApkVersion);
+    }
     public static boolean isPlayServicesPossiblyUpdating(Context context, int errorCode) { return false; }
     public static boolean isPlayStorePossiblyUpdating(Context context, int errorCode)    { return false; }
     public static boolean isUninstalledAppPossiblyUpdating(Context context, String pkg)  { return false; }
