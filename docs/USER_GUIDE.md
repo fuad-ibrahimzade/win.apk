@@ -151,6 +151,13 @@ downloaded APK is deleted after the install.
 Open an app by double-clicking its tile (or selecting it and pressing Enter),
 from its right-click menu, or with its Start menu or desktop shortcut.
 
+Some apps have no screen to open from a launcher: a plug-in, a companion, an
+app another app or a link opens. On a phone they have no icon. Opening one
+asks **Which screen should open?** and lists the screens other apps may open,
+by their names; the one you choose opens from then on (as a phone's shortcut
+to that screen would), and **App details > Window > Screen it opens** changes
+it. An app with none of those says it cannot be opened: other apps open it.
+
 The app's window opens at once, with the app's name and icon on its title bar
 and the icon in its middle, the way a phone shows an app's starting screen;
 the app's own content takes its place, in the same window to the eye, as
@@ -266,7 +273,7 @@ without an answer.
 
 | Section | What it holds |
 |---|---|
-| Window | **Orientation**: the settings' default, portrait or landscape for this app only (an app whose manifest fixes one shows **Portrait – required by the app** or **Landscape – required by the app** instead). **Window size**: the size the app's window was last given, with **Reset** |
+| Window | **Screen it opens** (only for an app with no screen to open from a launcher): the screen chosen when it was first opened, with **Change…**. **Orientation**: the settings' default, portrait or landscape for this app only (an app whose manifest fixes one shows **Portrait – required by the app** or **Landscape – required by the app** instead). **Window size**: the size the app's window was last given, with **Reset** |
 | Permissions | A switch per permission the app was asked for or granted, and **Reset permissions**; see [Permissions](#permissions) |
 | Shortcut | **Desktop shortcut**: adds or removes the app's desktop shortcut. The Start menu one is always there |
 | Performance | Only for an app with only ARM code: **Optimizing for this PC…** while its translation runs in the background (with the parts done so far), and **This app has only ARM code** when a library is too large to translate whole, so an x86_64 build of the app, if one exists, runs faster. See [ARM apps](arm-apps.md) |

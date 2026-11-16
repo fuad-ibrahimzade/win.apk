@@ -15,6 +15,15 @@
 // ActivityInfo.SCREEN_ORIENTATION_* number, -1 when it declares none), so the
 // library knows before starting the app whether it insists on portrait or
 // landscape: such an app opens that way whatever the user picked.
+// A fifth line names the activity the launcher starts (the MAIN/LAUNCHER
+// one), empty when the app has none: a plugin, a companion, an app opened
+// from another app or a link. Such an app has no icon on a device, and its
+// screens are reached the way `am start -n <package>/<activity>` and the
+// "activity launcher" tools reach them: by an explicit start of an activity
+// other apps may start. For it the lines after are those activities, one per
+// line, "<class>\t<label>" (the label resolved, empty when it has none), in
+// manifest order: exported and enabled, as ActivityStarter requires of a
+// start from another uid. The library offers them when the app is opened.
 //
 // It also verifies the installed APKs' signature (ApkVerification: apksig over
 // base.apk and every split), so the verdict is in the install log and in the
@@ -49,8 +58,19 @@ public final class AppMeta {
             Manifest mf = Manifest.parse(new File(""), apkPath);
             pkg = mf.packageName;
             String version = (mf.versionNameRaw != null ? mf.versionNameRaw : "").replace('\n', ' ');
-            save(new File(appDir, "package.txt"),
-                    pkg + "\n" + mf.versionCode + "\n" + version + "\n" + launchOrientation(mf) + "\n");
+            StringBuilder text = new StringBuilder();
+            text.append(pkg).append('\n').append(mf.versionCode).append('\n').append(version).append('\n')
+                .append(launchOrientation(mf)).append('\n')
+                .append(mf.launchableActivity != null ? mf.launchableActivity : "").append('\n');
+            if (mf.launchableActivity == null) {
+                for (Manifest.ActivityEntry e : startable(mf)) {
+                    String l = null;
+                    try { l = resolve(e.labelRaw, apkPath, pkg); } catch (Throwable ignored) { }
+                    text.append(e.name).append('\t')
+                        .append(l == null ? "" : l.replace('\t', ' ').replace('\n', ' ').trim()).append('\n');
+                }
+            }
+            save(new File(appDir, "package.txt"), text.toString());
             label = resolve(mf.applicationLabel, apkPath, pkg);
         } catch (Throwable t) {
             System.err.println("[win.apk] reading the app's name failed: " + t);
@@ -91,6 +111,17 @@ public final class AppMeta {
             }
         }
         return e != null ? e.screenOrientation : -1;
+    }
+
+    // The activities another app may start explicitly: exported (android:exported, or by
+    // AOSP's default, an intent filter) and enabled. Aliases count: they are components too.
+    static java.util.List<Manifest.ActivityEntry> startable(Manifest mf) {
+        java.util.List<Manifest.ActivityEntry> out = new java.util.ArrayList<>();
+        if (mf.activities == null) return out;
+        for (Manifest.ActivityEntry e : mf.activities.values()) {
+            if (e != null && e.name != null && e.exported && e.enabled) out.add(e);
+        }
+        return out;
     }
 
     // A literal label stays as it is; "@0x7f..." or "@string/name" is looked up.

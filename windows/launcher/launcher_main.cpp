@@ -454,6 +454,24 @@ const wchar_t* tr(const wchar_t* en) {
         {L"Apps", L"אפליקציות"},
         {L"Apps save to and open from your Downloads, Pictures, Documents, Music and Videos.", L"אפליקציות שומרות בתיקיות ההורדות, התמונות, המסמכים, המוזיקה והסרטונים שלך, ופותחות מהן."},
         {L"Cancel", L"ביטול"},
+        {L"Which screen should open?", L"איזה מסך לפתוח?"},
+        {L"{0} has no screen to open from a launcher, so on a phone it has no icon either. These are the screens "
+         L"other apps can open; the one you choose opens from now on, and App details can change it.",
+         L"ל-{0} אין מסך שנפתח ממסך הבית, ולכן גם בטלפון אין לה סמל. אלה המסכים שאפליקציות אחרות יכולות לפתוח; "
+         L"המסך שתבחרו ייפתח מעכשיו, ואפשר לשנות אותו בפרטי האפליקציה."},
+        {L"{0} cannot be opened", L"לא ניתן לפתוח את {0}"},
+        {L"It has no screen to open from a launcher, and none that other apps may open. It works for other apps "
+         L"(as a plug-in or a service), which open it themselves.",
+         L"אין לה מסך שנפתח ממסך הבית, ואף מסך שאפליקציות אחרות רשאיות לפתוח. היא פועלת בשביל אפליקציות אחרות "
+         L"(כתוסף או כשירות), והן פותחות אותה בעצמן."},
+        {L"OK", L"אישור"},
+        {L"Screen it opens", L"המסך שנפתח"},
+        {L"Asked when it opens", L"נשאל בעת הפתיחה"},
+        {L"The app has no screen to open from a launcher; this is the screen it opens, of those other apps can "
+         L"open.",
+         L"לאפליקציה אין מסך שנפתח ממסך הבית; זה המסך שנפתח, מבין אלה שאפליקציות אחרות יכולות לפתוח."},
+        {L"Change…", L"שינוי…"},
+        {L"{0} opens {1} from now on.", L"{0} תיפתח מעכשיו ב{1}."},
         {L"Cancelled", L"בוטלה"},
         {L"Close {0} first, then install it again.", L"קודם סגור את {0}, ואז התקן אותה שוב."},
         {L"Close {0} first, then remove it.", L"קודם סגור את {0}, ואז הסר אותה."},
@@ -4544,10 +4562,109 @@ void bring_forward(const std::wstring& name) {
 }
 
 // Opens the app: its splash at once, the runtime on a thread (run_thread), which reports back.
+// ---- an app with no launcher activity ----
+//
+// On a device an app whose manifest has no MAIN/LAUNCHER activity (a plug-in, a companion, an app another
+// app or a link opens) has no icon; its screens are reached by an explicit start of an activity other apps
+// may start, as `am start -n <package>/<activity>` and the "activity launcher" tools do. Here the library
+// has its tile, so opening it offers those activities (AppMeta lists them in library\<name>.package after
+// the empty fifth line) and starts the one chosen the same way: MACAPK_LAUNCH_ACTIVITY, which the runtime
+// honours only for an activity the manifest declares. The choice is kept, as a shortcut to that activity
+// would be, in library\<name>.activity; App details changes it.
+
+std::vector<std::string> package_of(const std::wstring& name);
+
+struct StartableActivity {
+    std::wstring cls, label;
+};
+
+// Line 5 of the package file is the launcher activity, empty when the app has none (AppMeta). An app
+// installed before the line was written has four lines: it is opened as before.
+bool has_no_launcher(const std::vector<std::string>& lines) { return lines.size() >= 5 && lines[4].empty(); }
+
+std::vector<StartableActivity> startable_activities(const std::vector<std::string>& lines) {
+    std::vector<StartableActivity> out;
+    for (size_t i = 5; i < lines.size(); ++i) {
+        if (lines[i].empty()) continue;
+        const size_t tab = lines[i].find('\t');
+        StartableActivity a;
+        a.cls = utf8_to_wide(lines[i].substr(0, tab));
+        if (tab != std::string::npos) a.label = utf8_to_wide(lines[i].substr(tab + 1));
+        out.push_back(std::move(a));
+    }
+    return out;
+}
+
+// Its label, else the class's own name.
+std::wstring activity_title(const StartableActivity& a) {
+    if (!a.label.empty()) return a.label;
+    const size_t dot = a.cls.find_last_of(L'.');
+    return dot == std::wstring::npos ? a.cls : a.cls.substr(dot + 1);
+}
+
+fs::path start_activity_file(const std::wstring& name) { return library_dir() / (name + L".activity"); }
+
+// The activity chosen for the app, if it is still one the app lets others start.
+std::wstring chosen_activity(const std::wstring& name, const std::vector<StartableActivity>& list) {
+    std::ifstream f(start_activity_file(name), std::ios::binary);
+    std::string line;
+    if (!std::getline(f, line)) return L"";
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    const std::wstring cls = utf8_to_wide(line);
+    for (const StartableActivity& a : list) {
+        if (a.cls == cls) return cls;
+    }
+    return L"";
+}
+
+// Asks which activity to open, and keeps the answer. False when there is none or the user cancels.
+bool choose_activity(const App& app, const std::vector<StartableActivity>& list, std::wstring* cls) {
+    Prompt p;
+    p.app = app.label;
+    p.icon = rounded_icon(app_dir(app.name) / L"icon.png", ipx(40));
+    p.caption = app.label;
+    if (list.empty()) {
+        p.question = fmt(L"{0} cannot be opened", {app.label});
+        p.note = tr(L"It has no screen to open from a launcher, and none that other apps may open. It works for other "
+                    L"apps (as a plug-in or a service), which open it themselves.");
+        p.buttons = {{IDOK, tr(L"OK")}};
+        run_dialog(p, owner());
+        return false;
+    }
+    p.question = tr(L"Which screen should open?");
+    p.note = fmt(L"{0} has no screen to open from a launcher, so on a phone it has no icon either. These are the "
+                 L"screens other apps can open; the one you choose opens from now on, and App details can change it.",
+                 {app.label});
+    constexpr int kFirst = 0x6000;
+    for (size_t i = 0; i < list.size(); ++i) {
+        p.buttons.push_back({kFirst + static_cast<int>(i), activity_title(list[i])});
+    }
+    p.buttons.push_back({IDCANCEL, tr(L"Cancel")});
+    p.default_id = kFirst;
+    // Stacked full width, one per activity: run_dialog would put them in a footer row.
+    const HWND own = owner();
+    p.owner = own && IsWindowVisible(own) && !IsIconic(own) ? own : nullptr;
+    RECT near_r;
+    if (!p.owner || !GetWindowRect(p.owner, &near_r)) near_r = work_area_with_cursor();
+    const int pressed = show_prompt(p, near_r);
+    if (pressed < kFirst || pressed >= kFirst + static_cast<int>(list.size())) return false;
+    *cls = list[static_cast<size_t>(pressed - kFirst)].cls;
+    std::ofstream f(start_activity_file(app.name), std::ios::binary | std::ios::trunc);
+    f << wide_to_utf8(*cls) << "\n";
+    return true;
+}
+
 void launch(const App& app) {
     if (is_pending(app.name)) {
         info(fmt(L"{0} is still being installed.", {app.label}), kInfo);
         return;
+    }
+    // An app with no launcher activity opens the activity chosen for it (see above).
+    std::wstring start_cls;
+    if (const std::vector<std::string> lines = package_of(app.name); has_no_launcher(lines)) {
+        const std::vector<StartableActivity> list = startable_activities(lines);
+        start_cls = chosen_activity(app.name, list);
+        if (start_cls.empty() && !choose_activity(app, list, &start_cls)) return;
     }
     if (!begin_run(app.name)) {
         bring_forward(app.name);
@@ -4555,6 +4672,7 @@ void launch(const App& app) {
     }
     // The app's window opens over the starting window, and takes its place (host/win32_window.cpp).
     auto* job = new RunJob{app.name, app.apk, {}};
+    if (!start_cls.empty()) job->env.push_back(L"MACAPK_LAUNCH_ACTIVITY=" + start_cls);
     if (const HWND start = start_window(app.name)) {
         job->env.push_back(L"WINAPK_START_WINDOW=" + std::to_wstring(reinterpret_cast<uintptr_t>(start)));
     }
@@ -4598,6 +4716,7 @@ void remove_app_files(const std::wstring& name) {
     fs::remove(package_file(name), ec);
     fs::remove(shortcut_icon(name), ec);
     fs::remove(library_dir() / (name + L".window"), ec);
+    fs::remove(start_activity_file(name), ec);
     fs::remove(orientation_file(name), ec);
     remove_tree(app_dir(name));
     fs::remove(data_dir() / L"android" / L"data" / L"app" / (L"." + name + L".installed"), ec);
@@ -6536,6 +6655,31 @@ void show_info(const App& app) {
                                                 info(fmt(L"{0} opens at the app window size in Settings again.", {a.label}),
                                                      kSuccess);
                                             }));
+            }
+        }
+        // An app with no launcher activity: the activity it opens (choose_activity).
+        if (const std::vector<std::string> lines = package_of(a.name); has_no_launcher(lines)) {
+            const std::vector<StartableActivity> list = startable_activities(lines);
+            const std::wstring cls = chosen_activity(a.name, list);
+            std::wstring shown = tr(L"Asked when it opens");
+            for (const StartableActivity& s : list) {
+                if (s.cls == cls) shown = activity_title(s);
+            }
+            if (!list.empty()) {
+                window.insert(window.begin(),
+                              button_row(std::wstring(tr(L"Screen it opens")) + L"  ·  " + shown,
+                                         tr(L"The app has no screen to open from a launcher; this is the screen it "
+                                            L"opens, of those other apps can open."),
+                                         tr(L"Change…"), [a, list] {
+                                             std::wstring chosen;
+                                             if (!choose_activity(a, list, &chosen)) return;
+                                             for (const StartableActivity& s : list) {
+                                                 if (s.cls != chosen) continue;
+                                                 info(fmt(L"{0} opens {1} from now on.", {a.label, activity_title(s)}),
+                                                      kSuccess);
+                                             }
+                                             rebuild_page();
+                                         }));
             }
         }
         out.push_back({tr(L"Window"), std::move(window), L""});

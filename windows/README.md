@@ -1634,6 +1634,11 @@ every such change is listed here:
     (`AccessibilityEvent.getTextChangeTypes`, `Network.CREATOR`,
     `OsConstants.PROT_READ`, `Context.bindService(.., BindServiceFlags)`,
     `android.icu.text.IDNA`, `sun.misc.Cleaner` and about fifty more).
+- `runtime/java/com/macapk/loader/Boot.java`: a launch through
+  `MACAPK_LAUNCH_ACTIVITY` carries no LAUNCHER category, as `am start -n`
+  sends a component alone. The library starts an app with no launcher activity
+  that way, on the activity the user chose of those the app lets others start
+  (`windows/java/.../AppMeta.java` lists them in `library\<name>.package`).
 - `runtime/java/android/security/MacApkTrustProvider.java`: a server chain the
   default trust manager refuses is logged once per host and reason (tag
   `MacApkTrust`): the chain as sent, the anchors the manager holds, the SNI
