@@ -1269,10 +1269,22 @@ final class MethodSplitter {
                 if (ref != null && (ref.kind == DexType.Ref.KIND_UNINIT
                                  || ref.kind == DexType.Ref.KIND_UNINIT_THIS)) continue candidates;
             }
+            // Win.apk: a short FORWARD branch that stays inside the block is allowed, and with it
+            // an instruction that only such a branch reaches. That is the handler R8 leaves for
+            // `catch (Throwable t) { Throwable c = t.getCause(); if (c != null) throw c; throw t; }`
+            // -- move-exception, invoke, move-result, if-eqz, throw, throw -- which one Dagger
+            // component constructor shares between hundreds of two-instruction try ranges: every
+            // range then spans to the method's last instructions, no cut is valid, and the
+            // constructor of Netflix's singleton component (341 ranges, 12041 instructions) was
+            // replaced by the stub that throws, in Application.onCreate. The copy gets a label of
+            // its own for each such target (Translator.emitHandlerClones).
             List<Integer> block = new ArrayList<>();
+            int farthest = hi;   // the highest index a branch of the block targets
             for (int k = hi; k < n && k < hi + MAX_CLONE_INSNS; k++) {
                 TypeInference.Insn in = norm.get(k);
-                if (!types.isReachable(in.offset) || jumpedTo.get(k)) continue candidates;
+                if (!types.isReachable(in.offset)) continue candidates;
+                if (jumpedTo.get(k) && !(k > hi && k <= farthest
+                        && jumpedOnlyFrom(k, hi, norm, types, off, resolve))) continue candidates;
                 if (k > hi && handlers.contains(in.offset)) continue candidates;
                 int nextSet = inTry.nextSetBit(in.offset);
                 if (nextSet >= 0 && nextSet < Math.max(in.nextOffset, in.offset + 1)) {
@@ -1280,9 +1292,16 @@ final class MethodSplitter {
                 }
                 if (insideDeferredNew(in.offset, deferredNew)) continue candidates;
                 int fam = TypeInference.familyOf(in.opcode);
-                if (!cloneSafe(fam)) continue candidates;
+                if (fam == TypeInference.F_IF || fam == TypeInference.F_IFZ) {
+                    int target = (int) in.args[fam == TypeInference.F_IF ? 2 : 1];
+                    Integer ti = indexOf.get(target);
+                    if (ti == null || ti <= k || ti >= hi + MAX_CLONE_INSNS || ti >= n) continue candidates;
+                    farthest = Math.max(farthest, ti);
+                } else if (!cloneSafe(fam)) {
+                    continue candidates;
+                }
                 block.add(in.offset);
-                if (fam == TypeInference.F_THROW || fam == TypeInference.F_RETURN) {
+                if ((fam == TypeInference.F_THROW || fam == TypeInference.F_RETURN) && k >= farthest) {
                     int[] b = new int[block.size()];
                     for (int j = 0; j < b.length; j++) b[j] = block.get(j);
                     out.put(h, b);
@@ -1291,6 +1310,21 @@ final class MethodSplitter {
             }
         }
         return out;
+    }
+
+    /** Whether every edge into index {@code k} that is not plain fall-through comes from an
+     *  instruction of the block that starts at {@code lo} and lies before {@code k}. */
+    private static boolean jumpedOnlyFrom(int k, int lo, List<TypeInference.Insn> norm,
+                                          TypeInference.Result types, int[] off, Resolver resolve) {
+        for (int i = 0; i < norm.size(); i++) {
+            if (!types.isReachable(off[i])) continue;
+            TypeInference.Insn in = norm.get(i);
+            for (int s : successors(in)) {
+                if (s == in.nextOffset) continue;
+                if (resolve.indexAtOrAfter(s) == k && (i < lo || i >= k)) return false;
+            }
+        }
+        return true;
     }
 
     /** Families a handler copy may contain: straight-line, no allocation, no

@@ -6721,6 +6721,12 @@ public class TextView extends View
             // caret is never reset by a movement-method change.
             if (method != null && !getDefaultEditable()
                     && !(text instanceof android.text.Spannable)) {
+                // Win.apk: the text it already holds becomes a Spannable too, which is what
+                // AOSP's setText(mText) here does to it (see macapkApplyBufferType).
+                if (MACAPK_TEXT_BUFFER_TYPE && text != null) {
+                    try { text = android.text.Spannable.Factory.getInstance().newSpannable(text); }
+                    catch (Throwable ignored) {}
+                }
                 macapkInitializeMovement();
             }
         }
@@ -6991,7 +6997,12 @@ public class TextView extends View
     static final boolean MACAPK_TEXT_BUFFER_TYPE =
         !"0".equals(System.getenv("MACAPK_TEXT_BUFFER_TYPE"));
     private CharSequence macapkApplyBufferType(CharSequence n) {
-        if (MACAPK_TEXT_BUFFER_TYPE && mBufferType == BufferType.SPANNABLE
+        // Win.apk: and under a movement method. AOSP's test is `type == SPANNABLE ||
+        // mMovement != null` (:7069): a view with LinkMovementMethod holds a Spannable
+        // whatever it was given, and code styles its links through getText(). Snapchat's
+        // sign-in link view casts it in its constructor; the ClassCastException left a
+        // FrameLayout in its place and the splash page's own cast then ended the page.
+        if (MACAPK_TEXT_BUFFER_TYPE && (mBufferType == BufferType.SPANNABLE || movementMethod != null)
                 && !(n instanceof android.text.Spannable)) {
             try { return android.text.Spannable.Factory.getInstance().newSpannable(n); }
             catch (Throwable ignored) {}

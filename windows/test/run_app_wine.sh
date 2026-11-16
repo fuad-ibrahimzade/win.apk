@@ -27,11 +27,14 @@ cmake -S "$WIN_DIR" -B "$BUILD/host" -G Ninja -DCMAKE_BUILD_TYPE=Release \
 cmake --build "$BUILD/host" --target winapk-runtime
 "$WIN_DIR/scripts/stage_runtime.sh" "$BUILD/host" "$BUILD/runtime"
 
+# Wine 9 has no GetAnycastIpAddressTable, which java.net.NetworkInterface needs (wine_iphlpapi.sh).
+"$HERE/wine_iphlpapi.sh"
 printf 'security.provider.1=SunMSCAPI\nsecurity.provider.2=SUN\n' > "$BUILD/wine.security"
 winpath() { "$WINE" winepath -w "$1" 2>/dev/null; }
 
 MACAPK_JVM_OPTS="-Djava.security.properties=$(winpath "$BUILD/wine.security")" \
-WINAPK_HEADLESS=1 WINAPK_HEADLESS_EXIT_AFTER_FRAMES="$FRAMES" \
+WINEDLLOVERRIDES="iphlpapi=n,b" \
+WINAPK_HEADLESS=1 WINAPK_HEADLESS_EXIT_AFTER_FRAMES="$FRAMES" WINAPK_SHORT_DATA_DIR=0 \
 WINAPK_HEADLESS_FRAME="$(winpath "$BUILD/frame.bmp")" \
 WINEDEBUG=-all "$WINE" "$BUILD/runtime/bin/winapk-runtime.exe" \
     --apk "$(winpath "$(realpath "$APK")")" --jdk "$(winpath "$JDK")" --data "$(winpath "$BUILD/appdata")" \

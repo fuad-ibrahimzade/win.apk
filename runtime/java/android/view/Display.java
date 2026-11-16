@@ -341,6 +341,9 @@ public class Display {
 
     /** No HDR pipeline on this compositor. */
     public boolean isHdr() { return false; }
+    /** AOSP getDeviceProductInfo() (API 31): the monitor's EDID identity, null when it is not
+     *  known. Win.apk: the method was missing, and Chrome's first activity failed to attach on it. */
+    public android.hardware.display.DeviceProductInfo getDeviceProductInfo() { return null; }
 
     /** No wide-gamut pipeline either; players pick the sRGB rendition. */
     public boolean isWideColorGamut() { return false; }

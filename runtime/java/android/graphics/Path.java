@@ -455,18 +455,34 @@ public class Path {
     }
     private void appendPerCornerRoundRect(float l, float t, float r, float b, float[] rad) {
         macapkNotSimple();
-        float tlx = rad[0], tly = rad[1], trx = rad[2], tryy = rad[3];
-        float brx = rad[4], bry = rad[5], blx = rad[6], bly = rad[7];
+        float tlx = Math.max(0f, rad[0]), tly = Math.max(0f, rad[1]), trx = Math.max(0f, rad[2]), tryy = Math.max(0f, rad[3]);
+        float brx = Math.max(0f, rad[4]), bry = Math.max(0f, rad[5]), blx = Math.max(0f, rad[6]), bly = Math.max(0f, rad[7]);
+        // Win.apk: Skia's SkRRect::setRectRadii. Radii that do not fit their side are all scaled
+        // by the one factor that makes the worst side fit, so the "pill" a drawable gets from a
+        // corner radius far past its size (android:radius="1000dp", the usual way to ask for one)
+        // comes out as half circles. Unscaled, each corner's curve ran past the opposite corner:
+        // the outline of Any.do's sign-in buttons was two crossing arcs and two straight ends.
+        float w = Math.abs(r - l), h = Math.abs(b - t), scale = 1f;
+        if (tlx + trx > w) scale = Math.min(scale, w / (tlx + trx));
+        if (blx + brx > w) scale = Math.min(scale, w / (blx + brx));
+        if (tly + bly > h) scale = Math.min(scale, h / (tly + bly));
+        if (tryy + bry > h) scale = Math.min(scale, h / (tryy + bry));
+        if (scale < 1f) {
+            tlx *= scale; tly *= scale; trx *= scale; tryy *= scale;
+            brx *= scale; bry *= scale; blx *= scale; bly *= scale;
+        }
+        // A quarter ellipse as one cubic: the control points sit this far along each arm.
+        final double k = 0.5522847498307936;
         Path2D.Double pp = new Path2D.Double();
         pp.moveTo(l + tlx, t);
         pp.lineTo(r - trx, t);
-        pp.quadTo(r, t, r, t + tryy);
+        pp.curveTo(r - trx + trx * k, t, r, t + tryy - tryy * k, r, t + tryy);
         pp.lineTo(r, b - bry);
-        pp.quadTo(r, b, r - brx, b);
+        pp.curveTo(r, b - bry + bry * k, r - brx + brx * k, b, r - brx, b);
         pp.lineTo(l + blx, b);
-        pp.quadTo(l, b, l, b - bly);
+        pp.curveTo(l + blx - blx * k, b, l, b - bly + bly * k, l, b - bly);
         pp.lineTo(l, t + tly);
-        pp.quadTo(l, t, l + tlx, t);
+        pp.curveTo(l, t + tly - tly * k, l + tlx - tlx * k, t, l + tlx, t);
         pp.closePath();
         path.append(pp, false);
     }

@@ -15,6 +15,7 @@
 
 #include "bionic_internal.h"
 
+#include "winapk/mini_bionic.h"
 #include "winapk/elf_tls.h"
 #include "winapk/fs_tls_patch.h"
 
@@ -350,8 +351,25 @@ using GuestDtor = void(WINAPK_GUEST_ABI*)(void*);
 std::mutex g_keys_lock;
 bool g_key_used[kKeysMax];
 GuestDtor g_key_dtor[kKeysMax];
+// A key's slot is used again once the key is deleted, and a thread that set a value under the old
+// key must read null under the new one (POSIX: "the value NULL shall be associated with the new
+// key in all active threads"). As in Bionic, each creation numbers the slot and a thread's value
+// counts only under the number it was set with. Without it LMDB, which keeps its reader slot in
+// a key, found the slot of an environment it had closed when it opened the next: ObjectBox's
+// "another read transaction is still active on this thread" (MDB_BAD_RSLOT), at CallApp's start.
+std::atomic<uint32_t> g_key_seq[kKeysMax];
 
-thread_local void* t_values[kKeysMax];
+struct KeyValue {
+    void* value;
+    uint32_t seq;
+};
+thread_local KeyValue t_values[kKeysMax];
+// The calling thread's value for slot `i`: null when it was set under an earlier key of the slot.
+void* key_value(int i) {
+    KeyValue& v = t_values[i];
+    if (v.value && v.seq != g_key_seq[i].load(std::memory_order_acquire)) v.value = nullptr;
+    return v.value;
+}
 
 WINAPK_GUEST_ABI int g_key_create(int32_t* key, GuestDtor dtor) {
     std::lock_guard<std::mutex> hold(g_keys_lock);
@@ -359,6 +377,7 @@ WINAPK_GUEST_ABI int g_key_create(int32_t* key, GuestDtor dtor) {
         if (!g_key_used[i]) {
             g_key_used[i] = true;
             g_key_dtor[i] = dtor;
+            g_key_seq[i].fetch_add(1, std::memory_order_release);
             *key = i;
             return 0;
         }
@@ -373,11 +392,11 @@ WINAPK_GUEST_ABI int g_key_delete(int32_t key) {
     return 0;
 }
 WINAPK_GUEST_ABI void* g_getspecific(int32_t key) {
-    return key >= 0 && key < kKeysMax ? t_values[key] : nullptr;
+    return key >= 0 && key < kKeysMax ? key_value(key) : nullptr;
 }
 WINAPK_GUEST_ABI int g_setspecific(int32_t key, const void* v) {
     if (key < 0 || key >= kKeysMax) return kEINVAL;
-    t_values[key] = const_cast<void*>(v);
+    t_values[key] = {const_cast<void*>(v), g_key_seq[key].load(std::memory_order_acquire)};
     return 0;
 }
 
@@ -386,14 +405,14 @@ void run_key_destructors() {
     for (int round = 0; round < 4; ++round) {
         bool any = false;
         for (int i = 0; i < kKeysMax; ++i) {
-            void* v = t_values[i];
+            void* v = key_value(i);
             if (!v) continue;
             GuestDtor d;
             {
                 std::lock_guard<std::mutex> hold(g_keys_lock);
                 d = g_key_used[i] ? g_key_dtor[i] : nullptr;
             }
-            t_values[i] = nullptr;
+            t_values[i].value = nullptr;
             if (d) {
                 d(v);
                 any = true;
@@ -417,6 +436,25 @@ struct Thread {
 };
 
 thread_local Thread* t_self = nullptr;
+
+// The guest's own threads, by Windows thread id, with the function each started in: what the debug agent
+// lists as the app's native threads (guest_threads, below). Never freed: a thread may end during exit.
+SRWLOCK g_started_lock = SRWLOCK_INIT;
+std::vector<winapk::GuestThread>& started_threads() {
+    static auto* v = new std::vector<winapk::GuestThread>();
+    return *v;
+}
+void forget_started(DWORD tid) {
+    AcquireSRWLockExclusive(&g_started_lock);
+    auto& v = started_threads();
+    for (size_t i = 0; i < v.size(); ++i) {
+        if (v[i].tid != tid) continue;
+        v[i] = v.back();
+        v.pop_back();
+        break;
+    }
+    ReleaseSRWLockExclusive(&g_started_lock);
+}
 
 // pthread_cleanup_push/pop: Bionic's macros put a __pthread_cleanup_t on the
 // caller's stack and link it into the thread's list with these two calls;
@@ -453,6 +491,7 @@ Thread* self_record() {
     t->result = result;
     // Bionic's order: C++ thread_local destructors, the cleanup handlers still
     // pushed, then the key destructors.
+    if (t->guest_created) forget_started(t->tid);
     tls_run_thread_dtors();
     while (GuestCleanup* c = t_cleanup) {
         t_cleanup = c->prev;
@@ -542,6 +581,9 @@ WINAPK_GUEST_ABI int g_create(Thread** out, const GuestAttr* attr, GuestStart st
         return kEAGAIN;
     }
     *out = t;
+    AcquireSRWLockExclusive(&g_started_lock);
+    started_threads().push_back({t->tid, reinterpret_cast<const void*>(start)});
+    ReleaseSRWLockExclusive(&g_started_lock);
     ResumeThread(t->handle);
     return 0;
 }
@@ -789,3 +831,16 @@ uint32_t thread_id_of(const void* pthread) {
 ShimTable pthread_symbols() { return WINAPK_SHIM_TABLE(kSymbols); }
 
 }  // namespace winapk::bionic
+
+namespace winapk {
+
+size_t guest_threads(GuestThread* out, size_t max) {
+    AcquireSRWLockShared(&bionic::g_started_lock);
+    const auto& v = bionic::started_threads();
+    for (size_t i = 0; i < v.size() && i < max; ++i) out[i] = v[i];
+    const size_t n = v.size();
+    ReleaseSRWLockShared(&bionic::g_started_lock);
+    return n;
+}
+
+}  // namespace winapk
