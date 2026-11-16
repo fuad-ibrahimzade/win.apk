@@ -2803,6 +2803,10 @@ public final class Boot {
                 intent.setAction(action != null && !action.isEmpty()
                         ? action : Intent.ACTION_MAIN);
                 intent.setClassName(manifest.packageName, cls);
+                // `am start -n` sends the component alone: no LAUNCHER category. The library starts
+                // an app with no launcher activity this way (an activity the user chose of those
+                // the app lets others start).
+                if (manifest.launchableCategory != null) intent.removeCategory(manifest.launchableCategory);
                 String extras = System.getenv("MACAPK_LAUNCH_EXTRAS");
                 if (extras != null && !extras.isEmpty()) {
                     for (String pair : extras.split(";")) {
